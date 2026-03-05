@@ -12,7 +12,12 @@ export default function ProjectsPage() {
     const { projects, setProjects } = useProjects();
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
     const [showDetailModal, setShowDetailModal] = useState(false);
+    const [detailDefaultTab, setDetailDefaultTab] = useState<"流程" | "工程">("流程");
     const [activeTab, setActiveTab] = useState<"全部" | "警示及重要案件" | "商用案" | "一般案" | "已掛表" | "已結案">("全部");
+    const [statusTexts, setStatusTexts] = useState<Record<string, { power: string, structure: string, admin: string, engineering: string }>>({});
+    const [isEditingStatus, setIsEditingStatus] = useState(false);
+    const [showCloseModal, setShowCloseModal] = useState(false);
+    const [closeDelayReasons, setCloseDelayReasons] = useState<Record<string, string>>({});
 
     // --- Create Wizard State ---
     const MOCK_USERS = ["未指定", "子佑", "A同事", "B同事", "C同事", "工程主管"];
@@ -41,9 +46,9 @@ export default function ProjectsPage() {
             if (layer === "2") {
                 setShowDetailModal(true);
                 if (tab === "flow") {
-                    setDetailActiveTab("流程");
+                    setDetailDefaultTab("流程");
                 } else if (tab === "engineering") {
-                    setDetailActiveTab("工程");
+                    setDetailDefaultTab("工程");
                 }
 
                 if (stepId) {
@@ -93,6 +98,71 @@ export default function ProjectsPage() {
         if (stepsScrollerRef.current) {
             stepsScrollerRef.current.scrollBy({ left: amount, behavior: "smooth" });
         }
+    };
+
+    // --- Helper functions ---
+    function getDaysDiff(start: string, end: string) {
+        const s = new Date(start);
+        const e = new Date(end);
+        s.setHours(0, 0, 0, 0);
+        e.setHours(0, 0, 0, 0);
+        return Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24));
+    }
+
+    function addDays(dateStr: string, days: number): string {
+        const date = new Date(dateStr);
+        date.setDate(date.getDate() + days);
+        return date.toISOString().split("T")[0];
+    }
+
+    const recalculateProjectDates = (project: ProjectFlowPlan): ProjectFlowPlan => {
+        let newSteps = [...project.steps];
+        for (let i = 0; i < newSteps.length; i++) {
+            const step = newSteps[i];
+            const templateNode = flowTemplate.find(t => t.id === step.id);
+            const dependsOnIds = templateNode?.depends_on || [];
+            let maxDelayShift = 0;
+            if (dependsOnIds.length > 0) {
+                const dependencies = newSteps.filter(s => dependsOnIds.includes(s.id));
+                dependencies.forEach(dep => {
+                    const depDate = dep.status === "完成" && dep.actual_end ? dep.actual_end : dep.current_planned_end;
+                    const shift = getDaysDiff(dep.baseline_planned_end, depDate);
+                    if (shift > maxDelayShift) maxDelayShift = shift;
+                });
+            } else if (i > 0) {
+                const prevStep = newSteps[i - 1];
+                const prevDate = prevStep.status === "完成" && prevStep.actual_end ? prevStep.actual_end : prevStep.current_planned_end;
+                const shift = getDaysDiff(prevStep.baseline_planned_end, prevDate);
+                if (shift > maxDelayShift) maxDelayShift = shift;
+            }
+            const baselineDate = addDays(project.start_date, step.offset_days);
+            newSteps[i] = { ...step, baseline_planned_end: baselineDate, current_planned_end: addDays(baselineDate, maxDelayShift) };
+        }
+        return { ...project, steps: newSteps };
+    };
+
+    // --- Filtered Projects ---
+    const filteredProjects = useMemo(() => {
+        return projects.filter(p => {
+            if (activeTab === "全部") return p.project_status !== "已結案";
+            if (activeTab === "警示及重要案件") return p.project_status !== "已結案" && (isWarningProject(p) || p.isImportant);
+            if (activeTab === "商用案") return p.project_status !== "已結案" && (p.kWp || 0) >= 100;
+            if (activeTab === "一般案") return p.project_status !== "已結案" && (p.kWp || 0) < 100;
+            if (activeTab === "已掛表") return p.project_status !== "已結案" && isMeteredProject(p);
+            if (activeTab === "已結案") return p.project_status === "已結案";
+            return true;
+        });
+    }, [projects, activeTab]);
+
+    // --- Event Handlers ---
+    const handleToggleImportant = (e: React.MouseEvent, projectId: string) => {
+        e.stopPropagation();
+        setProjects(prev => prev.map(p => p.project_id === projectId ? { ...p, isImportant: !p.isImportant } : p));
+    };
+
+    const handleReopenProject = (e: React.MouseEvent, projectId: string) => {
+        e.stopPropagation();
+        setProjects(prev => prev.map(p => p.project_id === projectId ? { ...p, project_status: "進行中" } : p));
     };
 
     // --- Helpers ---
@@ -645,12 +715,12 @@ export default function ProjectsPage() {
             )}
 
             {/* Project Detail Modal */}
-            <ProjectDetailModal 
-                isOpen={showDetailModal} 
+            <ProjectDetailModal
+                isOpen={showDetailModal}
                 onClose={() => setShowDetailModal(false)}
                 selectedProjectId={selectedProjectId}
                 focusStepId={null}
-                defaultTab={detailActiveTab}
+                defaultTab={detailDefaultTab}
             />
 
             {/* Create Project Wizard */}

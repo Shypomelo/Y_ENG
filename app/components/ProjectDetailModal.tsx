@@ -480,7 +480,70 @@ export default function ProjectDetailModal({
         setDelayModalConfig(null);
     };
 
+    // --- Available nodes to add (from flowTemplate, excluding already-added step IDs) ---
+    const availableNodesToAdd = useMemo(() => {
+        if (!selectedProject) return [];
+        const existingIds = new Set(selectedProject.steps.map(s => s.id));
+        return flowTemplate.filter(node => !existingIds.has(node.id));
+    }, [selectedProject]);
 
+    // --- Add Step ---
+    const handleAddStep = (projectId: string) => {
+        if (!selectedToAddNodeId) return;
+        const node = flowTemplate.find(n => n.id === selectedToAddNodeId);
+        if (!node) return;
+        setProjects(prev => prev.map(p => {
+            if (p.project_id !== projectId) return p;
+            const newStep = {
+                id: node.id,
+                name: node.name,
+                lane: node.lane,
+                offset_days: node.offset_days,
+                baseline_planned_end: addDays(p.start_date, node.offset_days),
+                current_planned_end: addDays(p.start_date, node.offset_days),
+                status: "未開始" as const,
+                is_core: node.is_core,
+                updated_at: new Date().toISOString(),
+            };
+            return recalculateProjectDates({ ...p, steps: [...p.steps, newStep] });
+        }));
+        setSelectedToAddNodeId("");
+    };
+
+    // --- Drag and Drop handlers ---
+    const handleDragStart = (e: React.DragEvent, index: number) => {
+        setDraggedStepIndex(index);
+        e.dataTransfer.effectAllowed = "move";
+    };
+
+    const handleDragOver = (e: React.DragEvent, _index: number) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+    };
+
+    const handleDrop = (e: React.DragEvent, dropIndex: number, projectId: string) => {
+        e.preventDefault();
+        if (draggedStepIndex === null || draggedStepIndex === dropIndex) {
+            setDraggedStepIndex(null);
+            return;
+        }
+        setProjects(prev => prev.map(p => {
+            if (p.project_id !== projectId) return p;
+            const steps = [...p.steps];
+            const [moved] = steps.splice(draggedStepIndex, 1);
+            steps.splice(dropIndex, 0, moved);
+            return recalculateProjectDates({ ...p, steps });
+        }));
+        setDraggedStepIndex(null);
+    };
+
+    // --- Remove Step ---
+    const handleRemoveStep = (projectId: string, stepId: string) => {
+        setProjects(prev => prev.map(p => {
+            if (p.project_id !== projectId) return p;
+            return recalculateProjectDates({ ...p, steps: p.steps.filter(s => s.id !== stepId) });
+        }));
+    };
 
     if (!isOpen || !selectedProject) return null;
 
@@ -836,331 +899,12 @@ export default function ProjectDetailModal({
                                     <div className="bg-white dark:bg-zinc-800/50 rounded-xl p-5 border border-zinc-200 dark:border-zinc-700/50 shadow-sm">
                                         <ProcureItemsBlock selectedProject={selectedProject} projects={projects} setProjects={setProjects} />
                                     </div>
-                                    {detailActiveTab === "流程" && (
-                                        <>
-                                            <div className="mb-4 text-sm text-zinc-500">
-                                                開案日 (Start Date): <span className="font-bold text-zinc-800 dark:text-zinc-200">{selectedProject.start_date}</span>
-                                                <br />修改「Offset 天數」將自動推算預計日期；修改「預計日期」將自動反推天數。可以拖曳列來排序。
-                                            </div>
-
-                                            {/* Scroll controls */}
-                                            <div className="flex items-center gap-4 mb-4 bg-white dark:bg-zinc-800/50 p-3 rounded-xl border border-zinc-200 dark:border-zinc-700/50 shadow-sm relative group">
-                                                <div className="absolute inset-y-0 left-0 w-32 bg-gradient-to-r from-white dark:from-zinc-900 to-transparent pointer-events-none rounded-l-xl z-20" />
-                                                <div className="absolute inset-y-0 right-0 w-32 bg-gradient-to-l from-white dark:from-zinc-900 to-transparent pointer-events-none rounded-r-xl z-20" />
-
-                                                <div className="flex items-center gap-3 w-64 shrink-0 z-30">
-                                                    <button onClick={() => scrollByAmount(-300)} className="rounded-full p-2 bg-zinc-100 text-zinc-600 hover:bg-white hover:shadow-md hover:text-zinc-900 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 transition-all border border-zinc-200 dark:border-zinc-700" title="向左捲動">
-                                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                                                    </button>
-                                                    <input type="range" min="0" max="100" value={scrollProgress} onChange={handleScrollSlider} className="flex-1 min-w-[100px] h-2 bg-zinc-200 rounded-lg appearance-none cursor-pointer dark:bg-zinc-700 accent-blue-600 dark:accent-blue-500" title="拖拉以快速左右捲動" />
-                                                    <button onClick={() => scrollByAmount(300)} className="rounded-full p-2 bg-zinc-100 text-zinc-600 hover:bg-white hover:shadow-md hover:text-zinc-900 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 transition-all border border-zinc-200 dark:border-zinc-700" title="向右捲動">
-                                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                                                    </button>
-                                                </div>
-
-                                                {/* Optional: Jump to Step Dropdown */}
-                                                <div className="flex-1 flex justify-end gap-2 items-center relative z-30">
-                                                    <div className="hidden sm:flex items-center gap-2 mr-4">
-                                                        <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded">
-                                                            目前流程: <span className="text-blue-600 dark:text-blue-400 font-bold">{selectedProject.steps[getCurrentStepIndex(selectedProject)]?.name || "無"}</span>
-                                                        </span>
-                                                    </div>
-                                                    <select
-                                                        onChange={(e) => {
-                                                            const id = e.target.value;
-                                                            if (id) {
-                                                                const el = document.getElementById(`step-row-${id}`);
-                                                                if (el) {
-                                                                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                                                    el.classList.add("!bg-blue-100", "dark:!bg-blue-900/40", "transition-all", "duration-1000");
-                                                                    setTimeout(() => {
-                                                                        el.classList.remove("!bg-blue-100", "dark:!bg-blue-900/40");
-                                                                    }, 2000);
-                                                                }
-                                                            }
-                                                        }}
-                                                        className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 w-48 sm:w-64"
-                                                        defaultValue=""
-                                                    >
-                                                        <option value="" disabled>快速跳轉至...</option>
-                                                        {selectedProject.steps.map((s, idx) => (
-                                                            <option key={s.id} value={s.id}>{idx + 1}. {s.name}</option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                            </div>
-
-                                            {/* Adding Custom Step */}
-                                            <div className="flex items-center gap-2 mb-4 bg-white dark:bg-zinc-800/50 p-4 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700/50 relative z-10">
-                                                <select
-                                                    value={selectedToAddNodeId}
-                                                    onChange={(e) => setSelectedToAddNodeId(e.target.value)}
-                                                    className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 min-w-[250px]"
-                                                >
-                                                    <option value="">-- 加入缺漏流程 --</option>
-                                                    {availableNodesToAdd.map(node => (
-                                                        <option key={node.id} value={node.id}>[{node.lane}] {node.name} (預設+{node.offset_days}天)</option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    onClick={() => handleAddStep(selectedProject.project_id)}
-                                                    disabled={!selectedToAddNodeId}
-                                                    className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                                >
-                                                    加入
-                                                </button>
-                                                {availableNodesToAdd.length === 0 && (
-                                                    <span className="text-sm text-emerald-600 dark:text-emerald-400 font-medium ml-2">所有範本流程皆已加入</span>
-                                                )}
-                                            </div>
-
-                                            {/* The Horizontal Scroller */}
-                                            <div ref={stepsScrollerRef} onScroll={handleScroll} className="w-full overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-700 shadow-inner bg-zinc-50 dark:bg-zinc-900/50" style={{ maxHeight: "calc(90vh - 250px)" }}>
-                                                <div className="min-w-max p-4 relative z-0">
-                                                    {/* Lane Headers for visual groups could be added, or just list items */}
-                                                    <table className="w-full text-left text-sm whitespace-nowrap border-collapse">
-                                                        <thead>
-                                                            <tr>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">順序</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.05)] w-[250px]">節點名稱 / 部門</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.05)] w-[160px]">狀態</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.05)] w-[100px]" title="以開案日為基準 +N 天">Offset 天數</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.05)] w-[120px]">基準預計日期</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.05)] w-[120px]" title="包含前面卡關延遞後的日期">當前預計日期</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.05)] w-[180px]">實際完成日期 / 操作</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.05)] text-center w-[80px]">操作</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700 bg-white dark:bg-zinc-800/80">
-                                                            {selectedProject.steps.map((step, index) => (
-                                                                <tr
-                                                                    key={step.id}
-                                                                    id={`step-row-${step.id}`}
-                                                                    draggable
-                                                                    onDragStart={(e) => handleDragStart(e, index)}
-                                                                    onDragOver={(e) => handleDragOver(e, index)}
-                                                                    onDrop={(e) => handleDrop(e, index, selectedProject.project_id)}
-                                                                    className={`group transition-colors ${draggedStepIndex === index ? 'opacity-50 bg-zinc-100 dark:bg-zinc-700' : 'hover:bg-zinc-50 dark:hover:bg-zinc-700/50'} ${step.status === '進行中' ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''}`}
-                                                                >
-                                                                    <td className="px-4 py-2 cursor-grab active:cursor-grabbing text-zinc-400 transition-colors group-hover:text-zinc-600 dark:group-hover:text-zinc-300">
-                                                                        <div className="flex items-center gap-2">
-                                                                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" /></svg>
-                                                                            <span className="font-medium">{index + 1}</span>
-                                                                        </div>
-                                                                    </td>
-                                                                    <td className="px-4 py-2">
-                                                                        <div className="font-bold text-zinc-900 dark:text-zinc-100 truncate w-[230px]" title={step.name}>{step.name}</div>
-                                                                        <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">{step.lane}</div>
-                                                                    </td>
-                                                                    <td className="px-4 py-2 flex items-center gap-2">
-                                                                        <select
-                                                                            value={step.status}
-                                                                            onChange={(e) => handleUpdateStepStatus(selectedProject.project_id, step.id, e.target.value as any)}
-                                                                            className={`rounded-md border-0 py-1 pl-3 pr-8 text-sm font-semibold ring-1 ring-inset focus:ring-2 focus:ring-inset sm:text-sm sm:leading-6 ${step.status === '完成' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/20' :
-                                                                                step.status === '進行中' ? 'bg-blue-50 text-blue-700 ring-blue-600/20 dark:bg-blue-500/10 dark:text-blue-400 dark:ring-blue-500/20' :
-                                                                                    step.status === '卡關' ? 'bg-orange-50 text-orange-700 ring-orange-600/20 dark:bg-orange-500/10 dark:text-orange-400 dark:ring-orange-500/20' :
-                                                                                        'bg-zinc-50 text-zinc-600 ring-zinc-500/10 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700'
-                                                                                }`}
-                                                                        >
-                                                                            <option value="未開始">未開始</option>
-                                                                            <option value="進行中">進行中</option>
-                                                                            <option value="卡關">卡關</option>
-                                                                            <option value="完成">完成</option>
-                                                                        </select>
-                                                                        {step.status !== "完成" && (
-                                                                            <button
-                                                                                onClick={() => setDelayModalConfig({ projectId: selectedProject.project_id, stepId: step.id, delay_override: step.delay_override || false, delay_reason: step.delay_reason || "" })}
-                                                                                className="text-zinc-400 hover:text-amber-600 dark:hover:text-amber-400 p-1 rounded transition-colors"
-                                                                                title="設定延遲原因"
-                                                                            >
-                                                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                                            </button>
-                                                                        )}
-                                                                    </td>
-                                                                    <td className="px-4 py-2">
-                                                                        <input
-                                                                            type="number"
-                                                                            value={step.offset_days}
-                                                                            onChange={(e) => handleUpdateStep(selectedProject.project_id, step.id, "offset_days", e.target.value)}
-                                                                            className="w-16 rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 text-center"
-                                                                        />
-                                                                    </td>
-                                                                    <td className="px-4 py-2">
-                                                                        <div className="text-zinc-500 dark:text-zinc-400">{step.baseline_planned_end}</div>
-                                                                    </td>
-                                                                    <td className="px-4 py-2">
-                                                                        <div className="text-amber-700 dark:text-amber-500 font-medium">{step.current_planned_end}</div>
-                                                                    </td>
-                                                                    <td className="px-4 py-2">
-                                                                        {step.actual_end ? (
-                                                                            <div className="flex flex-col gap-1 items-start">
-                                                                                <div className="text-emerald-700 dark:text-emerald-500 font-medium">{step.actual_end}</div>
-                                                                                <div className="flex gap-2">
-                                                                                    <button
-                                                                                        onClick={() => setEditDateModalConfig({
-                                                                                            projectId: selectedProject.project_id,
-                                                                                            stepId: step.id,
-                                                                                            beforeEnd: step.actual_end || "",
-                                                                                            afterEnd: step.actual_end || "",
-                                                                                            note: ""
-                                                                                        })}
-                                                                                        className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5"
-                                                                                    >
-                                                                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                                                                        修改日期
-                                                                                    </button>
-                                                                                    {step.corrections && step.corrections.length > 0 && (
-                                                                                        <button
-                                                                                            onClick={() => setHistoryModalConfig({ stepName: step.name, corrections: step.corrections! })}
-                                                                                            className="text-[10px] text-zinc-500 hover:underline flex items-center gap-0.5"
-                                                                                        >
-                                                                                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                                                            改期紀錄({step.corrections.length})
-                                                                                        </button>
-                                                                                    )}
-                                                                                </div>
-                                                                            </div>
-                                                                        ) : (
-                                                                            <div className="text-zinc-300 dark:text-zinc-600">-</div>
-                                                                        )}
-                                                                    </td>
-                                                                    <td className="px-4 py-2 text-center">
-                                                                        <button
-                                                                            onClick={() => handleRemoveStep(selectedProject.project_id, step.id)}
-                                                                            className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-500/10 p-1.5 rounded transition-colors"
-                                                                            title="移除項目"
-                                                                        >
-                                                                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                                                        </button>
-                                                                    </td>
-                                                                </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            </div>
-                                        </>
-                                    )}
-
-                                    {detailActiveTab === "工程" && (
-                                        <div className="space-y-6">
-                                            <div className="bg-white dark:bg-zinc-800/50 rounded-xl p-5 border border-zinc-200 dark:border-zinc-700/50 shadow-sm flex flex-col sm:flex-row gap-4 sm:items-center w-full min-w-0">
-                                                <div className="flex-1 min-w-0">
-                                                    <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-1">預計進場日 / 完工日</label>
-                                                    <div className="flex items-center gap-2">
-                                                        <input
-                                                            type="date"
-                                                            value={selectedProject.enginePlan?.entry_date || ""}
-                                                            onChange={(e) => {
-                                                                const updated = {
-                                                                    ...selectedProject,
-                                                                    enginePlan: {
-                                                                        ...selectedProject.enginePlan,
-                                                                        entry_date: e.target.value,
-                                                                        items: selectedProject.enginePlan?.items || []
-                                                                    }
-                                                                };
-                                                                setProjects(projects.map(p => p.project_id === selectedProject.project_id ? updated : p));
-                                                            }}
-                                                            className="w-full sm:w-auto rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            {/* 區塊一：工項清單 */}
-                                            <div className="bg-white dark:bg-zinc-800/50 rounded-xl max-w-full overflow-hidden border border-zinc-200 dark:border-zinc-700/50 shadow-sm">
-                                                <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-700/50 bg-zinc-50/50 dark:bg-zinc-800/50">
-                                                    <h3 className="font-bold text-zinc-900 dark:text-zinc-100">外包商進場項目清單</h3>
-                                                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">勾選需要進場的工項，與標註是否已完工。(僅勾選「需進場」才能勾選「已完工」)</p>
-                                                </div>
-                                                <div className="overflow-x-auto w-full">
-                                                    <table className="w-full text-left text-sm whitespace-nowrap min-w-[500px]">
-                                                        <thead>
-                                                            <tr className="bg-zinc-50 dark:bg-zinc-800/80">
-                                                                <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 border-b border-zinc-200 dark:border-zinc-700 w-[160px]">工項</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 border-b border-zinc-200 dark:border-zinc-700 text-center w-[120px]">需進場?</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 border-b border-zinc-200 dark:border-zinc-700 text-center w-[120px]">已完工?</th>
-                                                                <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 border-b border-zinc-200 dark:border-zinc-700 text-center w-[120px]">當前狀態</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700">
-                                                            {(["立柱", "橫支架", "C型鋼/鋪板", "步道鋼索", "上線槽", "直流線段", "光電板安裝", "AC接地", "AC管槽", "AC線段拉送線", "AC結線", "變流器(掛置/配管/結線)"] as const).map(key => {
-                                                                const item = selectedProject.enginePlan?.items.find(i => i.key === key) || { key, entered: false, done: false };
-                                                                const status = !item.entered ? "不需進場" : item.done ? "完成" : "進行中";
-                                                                return (
-                                                                    <tr key={key} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/50 transition-colors">
-                                                                        <td className="px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">{key}</td>
-                                                                        <td className="px-4 py-2.5 text-center">
-                                                                            <input
-                                                                                type="checkbox"
-                                                                                checked={item.entered}
-                                                                                onChange={(e) => {
-                                                                                    const checked = e.target.checked;
-                                                                                    const currentItems = selectedProject.enginePlan?.items || [];
-                                                                                    const filtered = currentItems.filter(i => i.key !== key);
-                                                                                    const newItems = [...filtered, { key, entered: checked, done: checked ? item.done : false }];
-
-                                                                                    const updated = {
-                                                                                        ...selectedProject,
-                                                                                        enginePlan: {
-                                                                                            entry_date: selectedProject.enginePlan?.entry_date,
-                                                                                            items: newItems
-                                                                                        }
-                                                                                    };
-                                                                                    setProjects(projects.map(p => p.project_id === selectedProject.project_id ? updated : p));
-                                                                                }}
-                                                                                className="rounded border-zinc-300 dark:border-zinc-700 text-blue-600 focus:ring-blue-600 form-checkbox h-4 w-4 bg-white dark:bg-zinc-900"
-                                                                            />
-                                                                        </td>
-                                                                        <td className="px-4 py-2.5 text-center">
-                                                                            <input
-                                                                                type="checkbox"
-                                                                                checked={item.done}
-                                                                                disabled={!item.entered}
-                                                                                onChange={(e) => {
-                                                                                    const checked = e.target.checked;
-                                                                                    const currentItems = selectedProject.enginePlan?.items || [];
-                                                                                    const filtered = currentItems.filter(i => i.key !== key);
-                                                                                    const newItems = [...filtered, { key, entered: item.entered, done: checked }];
-
-                                                                                    const updated = {
-                                                                                        ...selectedProject,
-                                                                                        enginePlan: {
-                                                                                            entry_date: selectedProject.enginePlan?.entry_date,
-                                                                                            items: newItems
-                                                                                        }
-                                                                                    };
-                                                                                    setProjects(projects.map(p => p.project_id === selectedProject.project_id ? updated : p));
-                                                                                }}
-                                                                                className="rounded border-zinc-300 dark:border-zinc-700 text-blue-600 focus:ring-blue-600 form-checkbox h-4 w-4 disabled:opacity-50 disabled:cursor-not-allowed bg-white dark:bg-zinc-900"
-                                                                            />
-                                                                        </td>
-                                                                        <td className="px-4 py-2.5 text-center">
-                                                                            <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${status === '完成' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/20' :
-                                                                                status === '進行中' ? 'bg-blue-50 text-blue-700 ring-blue-600/20 dark:bg-blue-500/10 dark:text-blue-400 dark:ring-blue-500/20' :
-                                                                                    'bg-zinc-50 text-zinc-600 ring-zinc-500/20 dark:bg-zinc-500/10 dark:text-zinc-400 dark:ring-zinc-500/20'
-                                                                                }`}>
-                                                                                {status}
-                                                                            </span>
-                                                                        </td>
-                                                                    </tr>
-                                                                );
-                                                            })}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            </div>
-
-                                            <div className="bg-white dark:bg-zinc-800/50 rounded-xl p-5 border border-zinc-200 dark:border-zinc-700/50 shadow-sm">
-                                                <ProcureItemsBlock selectedProject={selectedProject} projects={projects} setProjects={setProjects} />
-                                            </div>
-                                        </div>
-                                    )}
                                 </div>
+                            )}
+                        </div>
                     </div>
-                    </div>
+                </div>
             )}
-                </>
-            );
+        </>
+    );
 }
