@@ -9,7 +9,10 @@ import ProjectDetailModal from "../components/ProjectDetailModal";
 
 
 export default function ProjectsPage() {
-    const { projects, setProjects } = useProjects();
+    const {
+        projects, setProjects,
+        peopleByDept, vendorsByType
+    } = useProjects();
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
     const [showDetailModal, setShowDetailModal] = useState(false);
     const [detailDefaultTab, setDetailDefaultTab] = useState<"流程" | "工程">("流程");
@@ -19,8 +22,42 @@ export default function ProjectsPage() {
     const [showCloseModal, setShowCloseModal] = useState(false);
     const [closeDelayReasons, setCloseDelayReasons] = useState<Record<string, string>>({});
 
+    // --- Inline Edit State ---
+    const [editingField, setEditingField] = useState<string | null>(null);
+    const [editValue, setEditValue] = useState<string>("");
+
+    const handleStartEdit = (field: string, value: string) => {
+        setEditingField(field);
+        setEditValue(value);
+    };
+
+    const handleSaveEdit = (value?: string) => {
+        if (!selectedProject || !editingField) return;
+        const valToSave = value !== undefined ? value : editValue;
+
+        let updatePatch: any = {};
+        if (editingField === "kWp") {
+            const val = parseFloat(valToSave) || 0;
+            updatePatch = { kWp: val };
+        } else if (editingField.startsWith("owner_")) {
+            const role = editingField.replace("owner_", "");
+            updatePatch = {
+                owners: {
+                    ...(selectedProject.owners || {}),
+                    [role]: valToSave || undefined
+                }
+            };
+        }
+
+        setProjects(prev => prev.map(p =>
+            p.project_id === selectedProject.project_id ? { ...p, ...updatePatch } : p
+        ));
+        setEditingField(null);
+    };
+
+    const handleCancelEdit = () => setEditingField(null);
+
     // --- Create Wizard State ---
-    const MOCK_USERS = ["未指定", "子佑", "A同事", "B同事", "C同事", "工程主管"];
     const [isWizardOpen, setIsWizardOpen] = useState(false);
     const [wizardStep, setWizardStep] = useState<1 | 2>(1);
     const [newProjectTemp, setNewProjectTemp] = useState<ProjectFlowPlan | null>(null);
@@ -141,6 +178,72 @@ export default function ProjectsPage() {
         return { ...project, steps: newSteps };
     };
 
+    const handleConfirmClose = () => {
+        if (!selectedProject) return;
+
+        // 檢查是否有延遲項目未填原因
+        const delayedSteps = selectedProject.steps.filter(s => (s.delay_days ?? 0) > 0);
+        const missingReason = delayedSteps.some(s => !closeDelayReasons[s.id]?.trim());
+
+        if (missingReason) {
+            alert("請完整填寫所有延遲項目的延遲原因！");
+            return;
+        }
+
+        setProjects(prev => prev.map(p => {
+            if (p.project_id !== selectedProject.project_id) return p;
+
+            // 更新步驟中的延遲原因
+            const updatedSteps = p.steps.map(s => ({
+                ...s,
+                delay_reason: closeDelayReasons[s.id] || s.delay_reason
+            }));
+
+            return {
+                ...p,
+                project_status: "已結案" as const,
+                steps: updatedSteps,
+                updated_at: new Date().toISOString()
+            };
+        }));
+
+        setShowCloseModal(false);
+        setSelectedProjectId(null); // 結案後關閉摘要視窗
+    };
+
+    // --- Helpers (hoisted as function declarations to avoid TDZ) ---
+    const METER_STEP_ID = "P-007";
+
+    function isMeteredProject(project: ProjectFlowPlan) {
+        const step = project.steps.find(s => s.id === METER_STEP_ID);
+        if (!step) return false;
+        if (step.status !== "完成") return false;
+        if (!step.actual_end || step.actual_end.trim() === "") return false;
+        return true;
+    }
+
+    function getCurrentStepIndex(project: ProjectFlowPlan) {
+        const idx = project.steps.findIndex(s => s.status === "進行中");
+        return idx !== -1 ? idx : (project.steps.length > 0 && project.steps[project.steps.length - 1].status === "完成" ? project.steps.length - 1 : 0);
+    }
+
+    function isWarningProject(project: ProjectFlowPlan) {
+        const todayStr = new Date().toISOString().split("T")[0];
+        const currentIndex = getCurrentStepIndex(project);
+        const currentStep = project.steps[currentIndex];
+
+        if (currentStep && currentStep.status !== "完成" && getDaysDiff(todayStr, currentStep.current_planned_end) < 0) {
+            return true;
+        }
+
+        const hasUnexplainedDelay = project.steps.some(s =>
+            s.delay_days && s.delay_days > 0 && !s.delay_reason
+        );
+        if (hasUnexplainedDelay) return true;
+
+        return false;
+    }
+
     // --- Filtered Projects ---
     const filteredProjects = useMemo(() => {
         return projects.filter(p => {
@@ -165,42 +268,26 @@ export default function ProjectsPage() {
         setProjects(prev => prev.map(p => p.project_id === projectId ? { ...p, project_status: "進行中" } : p));
     };
 
-    // --- Helpers ---
-    const METER_STEP_ID = "P-007";
-
-    const isMeteredProject = (project: ProjectFlowPlan) => {
-        const step = project.steps.find(s => s.id === METER_STEP_ID);
-        if (!step) return false;
-        if (step.status !== "完成") return false;
-        if (!step.actual_end || step.actual_end.trim() === "") return false;
-        return true;
-    };
-
-    const getCurrentStepIndex = (project: ProjectFlowPlan) => {
-        const idx = project.steps.findIndex(s => s.status === "進行中");
-        return idx !== -1 ? idx : (project.steps.length > 0 && project.steps[project.steps.length - 1].status === "完成" ? project.steps.length - 1 : 0);
-    };
-
-    const isWarningProject = (project: ProjectFlowPlan) => {
-        const todayStr = new Date().toISOString().split("T")[0];
-        const currentIndex = getCurrentStepIndex(project);
-        const currentStep = project.steps[currentIndex];
-
-        // 條件一：正在進行中的步驟，今天 > current_planned_end
-        if (currentStep && currentStep.status !== "完成" && getDaysDiff(todayStr, currentStep.current_planned_end) < 0) {
-            return true;
+    const handleDeleteProject = () => {
+        if (!selectedProject) return;
+        if (window.confirm(`確定要刪除專案「${selectedProject.project_name}」嗎？此操作無法還原。`)) {
+            setProjects(prev => prev.filter(p => p.project_id !== selectedProject.project_id));
+            setSelectedProjectId(null);
         }
-
-        // 條件二：有任何曾經逾期 (delay_days > 0) 且未填寫延遲原因的步驟
-        const hasUnexplainedDelay = project.steps.some(s =>
-            s.delay_days && s.delay_days > 0 && !s.delay_reason
-        );
-        if (hasUnexplainedDelay) return true;
-
-        return false;
     };
 
-    // Filter out available nodes to add (not currently in steps)
+    const handleEditProjectName = () => {
+        if (!selectedProject) return;
+        const newName = window.prompt("請輸入新的案場名稱：", selectedProject.project_name);
+        if (newName !== null && newName.trim() !== "") {
+            setProjects(prev => prev.map(p =>
+                p.project_id === selectedProject.project_id ? { ...p, project_name: newName.trim() } : p
+            ));
+        }
+    };
+
+
+    // --- Filter out available nodes to add ---
     const availableNodesToAdd = selectedProject
         ? flowTemplate.filter(node => !selectedProject.steps.some(s => s.id === node.id) && !node.is_archived)
         : [];
@@ -486,37 +573,202 @@ export default function ProjectsPage() {
                             <div className="flex flex-col gap-3">
                                 <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100 pr-8 flex flex-wrap items-center gap-3">
                                     <span>{selectedProject.project_name}</span>
-                                    <span className="text-sm font-normal text-zinc-600 bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 px-2.5 py-0.5 rounded-md border border-zinc-300 dark:border-zinc-600 shrink-0">
-                                        {selectedProject.kWp} Kwp
+                                    <button onClick={handleEditProjectName} className="text-zinc-400 hover:text-blue-500 transition-colors" title="修改案名">
+                                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                    </button>
+                                    <span className="text-sm font-normal text-zinc-600 bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 px-2.5 py-0.5 rounded-md border border-zinc-300 dark:border-zinc-600 shrink-0 select-none">
+                                        {editingField === "kWp" ? (
+                                            <input
+                                                type="number"
+                                                autoFocus
+                                                value={editValue}
+                                                onChange={(e) => setEditValue(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === "Enter") handleSaveEdit();
+                                                    if (e.key === "Escape") handleCancelEdit();
+                                                }}
+                                                className="w-20 bg-white dark:bg-zinc-800 border-none outline-none py-0 px-1 text-zinc-900 dark:text-zinc-100"
+                                            />
+                                        ) : (
+                                            <span onDoubleClick={() => handleStartEdit("kWp", String(selectedProject.kWp))}>
+                                                {selectedProject.kWp} Kwp
+                                            </span>
+                                        )}
                                     </span>
                                 </h2>
                                 <div className="flex flex-wrap items-center gap-2">
                                     {/* 工程 */}
-                                    <div className="flex items-center rounded-full border border-emerald-200 bg-emerald-50 text-xs font-medium text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 overflow-hidden shadow-sm" title="工程負責人">
+                                    <div
+                                        className="flex items-center rounded-full border border-emerald-200 bg-emerald-50 text-xs font-medium text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 overflow-hidden shadow-sm select-none cursor-default"
+                                        title="雙擊編輯：工程負責人"
+                                        onDoubleClick={() => handleStartEdit("owner_engineering", selectedProject.owners?.engineering || "")}
+                                    >
                                         <div className="bg-emerald-200 dark:bg-emerald-700/60 w-3 self-stretch" />
-                                        <span className="px-2.5 py-1">{selectedProject.owners?.engineering || "未指定"}</span>
+                                        {editingField === "owner_engineering" ? (
+                                            <select
+                                                autoFocus
+                                                value={editValue}
+                                                onChange={(e) => handleSaveEdit(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                className="bg-transparent border-none outline-none py-1 pl-1 pr-1"
+                                            >
+                                                <option value="">未指定</option>
+                                                {peopleByDept["工程"]?.map(name => <option key={name} value={name}>{name}</option>)}
+                                            </select>
+                                        ) : (
+                                            <span className="px-2.5 py-1">{selectedProject.owners?.engineering || "未指定"}</span>
+                                        )}
                                     </div>
                                     {/* 專案 */}
-                                    <div className="flex items-center rounded-full border border-blue-200 bg-blue-50 text-xs font-medium text-blue-800 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300 overflow-hidden shadow-sm" title="專案負責人">
+                                    <div
+                                        className="flex items-center rounded-full border border-blue-200 bg-blue-50 text-xs font-medium text-blue-800 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300 overflow-hidden shadow-sm select-none cursor-default"
+                                        title="雙擊編輯：專案負責人"
+                                        onDoubleClick={() => handleStartEdit("owner_pm", selectedProject.owners?.pm || "")}
+                                    >
                                         <div className="bg-blue-200 dark:bg-blue-700/60 w-3 self-stretch" />
-                                        <span className="px-2.5 py-1">{selectedProject.owners?.pm || "未指定"}</span>
+                                        {editingField === "owner_pm" ? (
+                                            <select
+                                                autoFocus
+                                                value={editValue}
+                                                onChange={(e) => handleSaveEdit(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                className="bg-transparent border-none outline-none py-1 pl-1 pr-1"
+                                            >
+                                                <option value="">未指定</option>
+                                                {peopleByDept["專案"]?.map(name => <option key={name} value={name}>{name}</option>)}
+                                            </select>
+                                        ) : (
+                                            <span className="px-2.5 py-1">{selectedProject.owners?.pm || "未指定"}</span>
+                                        )}
                                     </div>
                                     {/* 結構 */}
-                                    <div className="flex items-center rounded-full border border-violet-200 bg-violet-50 text-xs font-medium text-violet-800 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300 overflow-hidden shadow-sm" title="結構繪圖負責人">
+                                    <div
+                                        className="flex items-center rounded-full border border-violet-200 bg-violet-50 text-xs font-medium text-violet-800 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300 overflow-hidden shadow-sm select-none cursor-default"
+                                        title="雙擊編輯：結構負責人"
+                                        onDoubleClick={() => handleStartEdit("owner_structural", selectedProject.owners?.structural || "")}
+                                    >
                                         <div className="bg-violet-200 dark:bg-violet-700/60 w-3 self-stretch" />
-                                        <span className="px-2.5 py-1">{selectedProject.owners?.structural || "未指定"}</span>
+                                        {editingField === "owner_structural" ? (
+                                            <select
+                                                autoFocus
+                                                value={editValue}
+                                                onChange={(e) => handleSaveEdit(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                className="bg-transparent border-none outline-none py-1 pl-1 pr-1"
+                                            >
+                                                <option value="">未指定</option>
+                                                {peopleByDept["結構"]?.map(name => <option key={name} value={name}>{name}</option>)}
+                                            </select>
+                                        ) : (
+                                            <span className="px-2.5 py-1">{selectedProject.owners?.structural || "未指定"}</span>
+                                        )}
                                     </div>
                                     {/* 行政 */}
-                                    <div className="flex items-center rounded-full border border-amber-200 bg-amber-50 text-xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 overflow-hidden shadow-sm" title="行政負責人">
+                                    <div
+                                        className="flex items-center rounded-full border border-amber-200 bg-amber-50 text-xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 overflow-hidden shadow-sm select-none cursor-default"
+                                        title="雙擊編輯：行政負責人"
+                                        onDoubleClick={() => handleStartEdit("owner_admin", selectedProject.owners?.admin || "")}
+                                    >
                                         <div className="bg-amber-200 dark:bg-amber-700/60 w-3 self-stretch" />
-                                        <span className="px-2.5 py-1">{selectedProject.owners?.admin || "未指定"}</span>
+                                        {editingField === "owner_admin" ? (
+                                            <select
+                                                autoFocus
+                                                value={editValue}
+                                                onChange={(e) => handleSaveEdit(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                className="bg-transparent border-none outline-none py-1 pl-1 pr-1"
+                                            >
+                                                <option value="">未指定</option>
+                                                {peopleByDept["行政"]?.map(name => <option key={name} value={name}>{name}</option>)}
+                                            </select>
+                                        ) : (
+                                            <span className="px-2.5 py-1">{selectedProject.owners?.admin || "未指定"}</span>
+                                        )}
                                     </div>
                                     {/* 業務 */}
-                                    <div className="flex items-center rounded-full border border-rose-200 bg-rose-50 text-xs font-medium text-rose-800 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-300 overflow-hidden shadow-sm" title="業務負責人">
+                                    <div
+                                        className="flex items-center rounded-full border border-rose-200 bg-rose-50 text-xs font-medium text-rose-800 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-300 overflow-hidden shadow-sm select-none cursor-default"
+                                        title="雙擊編輯：業務負責人"
+                                        onDoubleClick={() => handleStartEdit("owner_sales", selectedProject.owners?.sales || "")}
+                                    >
                                         <div className="bg-rose-200 dark:bg-rose-700/60 w-3 self-stretch" />
-                                        <span className="px-2.5 py-1">{selectedProject.owners?.sales || "未指定"}</span>
+                                        {editingField === "owner_sales" ? (
+                                            <select
+                                                autoFocus
+                                                value={editValue}
+                                                onChange={(e) => handleSaveEdit(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                className="bg-transparent border-none outline-none py-1 pl-1 pr-1"
+                                            >
+                                                <option value="">未指定</option>
+                                                {peopleByDept["業務"]?.map(name => <option key={name} value={name}>{name}</option>)}
+                                            </select>
+                                        ) : (
+                                            <span className="px-2.5 py-1">{selectedProject.owners?.sales || "未指定"}</span>
+                                        )}
                                     </div>
                                 </div>
+
+                                {/* 廠商資訊 */}
+                                <div className="flex flex-wrap items-center gap-2 mt-2">
+                                    {/* 結構包商 */}
+                                    <div
+                                        className="flex items-center rounded-full border border-zinc-200 bg-zinc-50 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300 overflow-hidden shadow-sm select-none cursor-default"
+                                        title="雙擊編輯：結構包商"
+                                        onDoubleClick={() => handleStartEdit("owner_vendor_structure", selectedProject.owners?.vendor_structure || "")}
+                                    >
+                                        <div className="bg-zinc-200 dark:bg-zinc-700 w-3 self-stretch" />
+                                        <span className="px-2 py-1 text-[10px] text-zinc-400 font-bold uppercase tracking-wider border-r border-zinc-200 dark:border-zinc-700">結構包商</span>
+                                        {editingField === "owner_vendor_structure" ? (
+                                            <select
+                                                autoFocus
+                                                value={editValue}
+                                                onChange={(e) => handleSaveEdit(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                className="bg-transparent border-none outline-none py-1 pl-1 pr-1"
+                                            >
+                                                <option value="">未指定</option>
+                                                {vendorsByType["鋼構"]?.map(name => <option key={name} value={name}>{name}</option>)}
+                                            </select>
+                                        ) : (
+                                            <span className="px-2.5 py-1">{selectedProject.owners?.vendor_structure || "未指定"}</span>
+                                        )}
+                                    </div>
+                                    {/* 電力包商 */}
+                                    <div
+                                        className="flex items-center rounded-full border border-zinc-200 bg-zinc-50 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300 overflow-hidden shadow-sm select-none cursor-default"
+                                        title="雙擊編輯：電力包商"
+                                        onDoubleClick={() => handleStartEdit("owner_vendor_power", selectedProject.owners?.vendor_power || "")}
+                                    >
+                                        <div className="bg-zinc-200 dark:bg-zinc-700 w-3 self-stretch" />
+                                        <span className="px-2 py-1 text-[10px] text-zinc-400 font-bold uppercase tracking-wider border-r border-zinc-200 dark:border-zinc-700">電力包商</span>
+                                        {editingField === "owner_vendor_power" ? (
+                                            <select
+                                                autoFocus
+                                                value={editValue}
+                                                onChange={(e) => handleSaveEdit(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                className="bg-transparent border-none outline-none py-1 pl-1 pr-1"
+                                            >
+                                                <option value="">未指定</option>
+                                                {vendorsByType["電力"]?.map(name => <option key={name} value={name}>{name}</option>)}
+                                            </select>
+                                        ) : (
+                                            <span className="px-2.5 py-1">{selectedProject.owners?.vendor_power || "未指定"}</span>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="absolute right-16 top-4 flex items-center gap-2">
+                                {selectedProject.project_status === "已結案" && (
+                                    <button
+                                        onClick={handleDeleteProject}
+                                        className="rounded bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/50 dark:text-red-400 px-3 py-1.5 text-sm font-semibold transition-colors border border-red-200 dark:border-red-800"
+                                    >
+                                        刪除專案
+                                    </button>
+                                )}
                             </div>
                             <button
                                 onClick={closeMainModal}
@@ -723,6 +975,80 @@ export default function ProjectsPage() {
                 defaultTab={detailDefaultTab}
             />
 
+            {/* Project Close Modal */}
+            {showCloseModal && selectedProject && (
+                <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+                    <div className="fixed inset-0 bg-zinc-900/60 backdrop-blur-sm" onClick={() => setShowCloseModal(false)} />
+                    <div className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
+                            <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">確認結案：{selectedProject.project_name}</h3>
+                            <button onClick={() => setShowCloseModal(false)} className="text-zinc-400 hover:text-zinc-500">
+                                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto space-y-6">
+                            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-xl p-4 flex gap-3">
+                                <svg className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                <div>
+                                    <h4 className="text-sm font-bold text-amber-800 dark:text-amber-400">結案注意事項</h4>
+                                    <p className="text-xs text-amber-700/80 dark:text-amber-500/80 mt-1 leading-relaxed">
+                                        請確認所有流程已完成。若有延遲項目，請務必填寫延遲原因。結案後專案將移至「已結案」清單。
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* 延遲項目清單 */}
+                            <div>
+                                <h4 className="text-sm font-bold text-zinc-800 dark:text-zinc-200 mb-4 flex items-center gap-2">
+                                    <span className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px] px-1.5 py-0.5 rounded">必填</span>
+                                    延遲項目原因填寫
+                                </h4>
+                                <div className="space-y-4">
+                                    {selectedProject.steps.filter(s => (s.delay_days ?? 0) > 0).length === 0 ? (
+                                        <div className="text-center py-8 text-zinc-500 text-sm italic bg-zinc-50 dark:bg-zinc-800/50 rounded-xl border border-dashed border-zinc-200 dark:border-zinc-700">
+                                            此專案無延遲項目，表現優異！
+                                        </div>
+                                    ) : (
+                                        selectedProject.steps.filter(s => (s.delay_days ?? 0) > 0).map(step => (
+                                            <div key={step.id} className="bg-white dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl p-4 shadow-sm">
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <span className="text-sm font-bold text-zinc-800 dark:text-zinc-200">{step.name}</span>
+                                                    <span className="text-xs font-bold text-red-600 bg-red-50 dark:bg-red-900/20 px-2 py-0.5 rounded">
+                                                        延遲 {step.delay_days} 天
+                                                    </span>
+                                                </div>
+                                                <textarea
+                                                    className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all min-h-[80px]"
+                                                    placeholder="請輸入延遲原因..."
+                                                    value={closeDelayReasons[step.id] || ""}
+                                                    onChange={(e) => setCloseDelayReasons(prev => ({ ...prev, [step.id]: e.target.value }))}
+                                                />
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="p-6 border-t border-zinc-100 dark:border-zinc-800 flex justify-end gap-3 bg-zinc-50/50 dark:bg-zinc-900/50">
+                            <button
+                                onClick={() => setShowCloseModal(false)}
+                                className="px-6 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800 rounded-xl transition-colors"
+                            >
+                                我再檢查一下
+                            </button>
+                            <button
+                                onClick={handleConfirmClose}
+                                className="px-8 py-2.5 text-sm font-bold text-white bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white rounded-xl transition-colors shadow-lg shadow-zinc-900/10"
+                            >
+                                確認結案
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Create Project Wizard */}
             {isWizardOpen && newProjectTemp && (
                 <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 py-8 sm:p-6 overflow-y-auto">
@@ -774,7 +1100,8 @@ export default function ProjectsPage() {
                                                 onChange={(e) => setNewProjectTemp({ ...newProjectTemp, owners: { ...newProjectTemp.owners, engineering: e.target.value } })}
                                                 className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
                                             >
-                                                {MOCK_USERS.map(u => <option key={u} value={u}>{u}</option>)}
+                                                <option value="">-- 未指定 --</option>
+                                                {peopleByDept["工程"].map(u => <option key={u} value={u}>{u}</option>)}
                                             </select>
                                         </div>
                                         <div>
@@ -784,27 +1111,8 @@ export default function ProjectsPage() {
                                                 onChange={(e) => setNewProjectTemp({ ...newProjectTemp, owners: { ...newProjectTemp.owners, pm: e.target.value } })}
                                                 className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
                                             >
-                                                {MOCK_USERS.map(u => <option key={u} value={u}>{u}</option>)}
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">結構繪圖負責人</label>
-                                            <select
-                                                value={newProjectTemp.owners?.structural || ""}
-                                                onChange={(e) => setNewProjectTemp({ ...newProjectTemp, owners: { ...newProjectTemp.owners, structural: e.target.value } })}
-                                                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                                            >
-                                                {MOCK_USERS.map(u => <option key={u} value={u}>{u}</option>)}
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">行政負責人</label>
-                                            <select
-                                                value={newProjectTemp.owners?.admin || ""}
-                                                onChange={(e) => setNewProjectTemp({ ...newProjectTemp, owners: { ...newProjectTemp.owners, admin: e.target.value } })}
-                                                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                                            >
-                                                {MOCK_USERS.map(u => <option key={u} value={u}>{u}</option>)}
+                                                <option value="">-- 未指定 --</option>
+                                                {peopleByDept["專案"].map(u => <option key={u} value={u}>{u}</option>)}
                                             </select>
                                         </div>
                                         <div>
@@ -814,7 +1122,30 @@ export default function ProjectsPage() {
                                                 onChange={(e) => setNewProjectTemp({ ...newProjectTemp, owners: { ...newProjectTemp.owners, sales: e.target.value } })}
                                                 className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
                                             >
-                                                {MOCK_USERS.map(u => <option key={u} value={u}>{u}</option>)}
+                                                <option value="">-- 未指定 --</option>
+                                                {peopleByDept["業務"].map(u => <option key={u} value={u}>{u}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">結構包商</label>
+                                            <select
+                                                value={newProjectTemp.owners?.vendor_structure || ""}
+                                                onChange={(e) => setNewProjectTemp({ ...newProjectTemp, owners: { ...newProjectTemp.owners, vendor_structure: e.target.value } })}
+                                                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                                            >
+                                                <option value="">-- 未指定 --</option>
+                                                {vendorsByType["鋼構"].map(v => <option key={v} value={v}>{v}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">電力包商</label>
+                                            <select
+                                                value={newProjectTemp.owners?.vendor_power || ""}
+                                                onChange={(e) => setNewProjectTemp({ ...newProjectTemp, owners: { ...newProjectTemp.owners, vendor_power: e.target.value } })}
+                                                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                                            >
+                                                <option value="">-- 未指定 --</option>
+                                                {vendorsByType["電力"].map(v => <option key={v} value={v}>{v}</option>)}
                                             </select>
                                         </div>
                                     </div>

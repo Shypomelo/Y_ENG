@@ -35,14 +35,16 @@ export function migrateFlowTemplateToDepartmentFlows(flows: FlowNode[]): Record<
     const result: Record<DeptCode, DepartmentFlow> = {
         "E": { dept: "工程", code: "E", steps: [] },
         "P": { dept: "專案", code: "P", steps: [] },
-        "S": { dept: "採購", code: "S", steps: [] },
+        "A": { dept: "行政", code: "A", steps: [] },
         "B": { dept: "業務", code: "B", steps: [] },
+        "ST": { dept: "結構", code: "ST", steps: [] },
     };
 
     const getCode = (lane: string): DeptCode => {
         if (lane === "工程") return "E";
         if (lane === "專案") return "P";
-        if (lane === "採購") return "S";
+        if (lane === "行政") return "A";
+        if (lane === "結構") return "ST";
         return "B";
     };
 

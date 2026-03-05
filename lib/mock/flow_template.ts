@@ -1,7 +1,7 @@
 export type FlowNode = {
     id: string;
     seq: number;
-    lane: "工程" | "專案" | "採購" | "業務";
+    lane: "工程" | "專案" | "業務" | "結構" | "行政";
     name: string;
     depends_on: string[];
     deliverable: string;
@@ -130,7 +130,7 @@ export const flowTemplate: FlowNode[] = [
     {
         id: "S-001",
         seq: 11,
-        lane: "採購",
+        lane: "行政",
         name: "採購需求彙整",
         deliverable: "BOM/分包範圍/交期",
         depends_on: ["P-005"],
@@ -141,7 +141,7 @@ export const flowTemplate: FlowNode[] = [
     {
         id: "S-002",
         seq: 12,
-        lane: "採購",
+        lane: "行政",
         name: "發包/詢比議價/下單",
         deliverable: "包商與材料",
         depends_on: ["B-004", "S-001"],
@@ -172,7 +172,7 @@ export const flowTemplate: FlowNode[] = [
     {
         id: "S-003",
         seq: 15,
-        lane: "採購",
+        lane: "行政",
         name: "到貨追蹤/點交驗收",
         deliverable: "缺料清單、到貨日",
         depends_on: ["S-002"],

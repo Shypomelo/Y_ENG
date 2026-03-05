@@ -1,29 +1,32 @@
 "use client";
 
 import { useState, Fragment } from "react";
-import { flowTemplate, FlowNode } from "../../lib/mock/flow_template";
-import { departmentFlows, DeptCode, DeptStep, Dept } from "../../lib/mock/department_flows";
+import { useProjects } from "../providers/projects-store";
+import { FlowNode } from "../../lib/mock/flow_template";
+import { DeptCode, DeptStep, Dept } from "../../lib/mock/department_flows";
 
-type TabName = "流程模板" | "工程流程" | "專案流程" | "採購流程" | "業務流程";
+type TabName = "流程模板" | "工程流程" | "專案流程" | "業務流程" | "結構流程" | "行政流程";
 
 const TAB_TO_CODE: Record<Exclude<TabName, "流程模板">, DeptCode> = {
     "工程流程": "E",
     "專案流程": "P",
-    "採購流程": "S",
-    "業務流程": "B"
+    "業務流程": "B",
+    "結構流程": "ST",
+    "行政流程": "A"
 };
 
 export default function FlowTemplatePage() {
+    const {
+        flowTemplateOrder: nodes,
+        setFlowTemplateOrder: setNodes,
+        deptFlowConfig: deptFlows,
+        setDeptFlowConfig: setDeptFlows
+    } = useProjects();
+
     const [activeTab, setActiveTab] = useState<TabName>("流程模板");
     const [showId, setShowId] = useState(false);
-
-    // --- 流程模板 (主流程) 排序狀態 ---
-    const [nodes, setNodes] = useState<FlowNode[]>(flowTemplate);
     const [draggingId, setDraggingId] = useState<string | null>(null);
     const [dragOverId, setDragOverId] = useState<string | null>(null);
-
-    // --- 各部門流程 狀態 ---
-    const [deptFlows, setDeptFlows] = useState<Record<DeptCode, typeof departmentFlows[DeptCode]>>(departmentFlows);
     const [openDeptDropdown, setOpenDeptDropdown] = useState<string | null>(null);
     const [expandedTierStepId, setExpandedTierStepId] = useState<string | null>(null);
     const [newDeptNodeName, setNewDeptNodeName] = useState("");
@@ -338,8 +341,9 @@ export default function FlowTemplatePage() {
         const allDeptSteps = [
             ...deptFlows.E.steps,
             ...deptFlows.P.steps,
-            ...deptFlows.S.steps,
             ...deptFlows.B.steps,
+            ...deptFlows.ST.steps,
+            ...deptFlows.A.steps,
         ];
 
         // 轉成 dropdown options
@@ -350,7 +354,7 @@ export default function FlowTemplatePage() {
             originalStep: s
         }));
 
-        const depts = ["工程", "專案", "採購", "業務"] as Dept[];
+        const depts = ["工程", "專案", "業務", "結構", "行政"] as Dept[];
 
         return (
             <div className="space-y-6">
@@ -628,7 +632,7 @@ export default function FlowTemplatePage() {
 
             {/* Bookmark Tabs */}
             <div className="flex overflow-x-auto border-b border-zinc-200 dark:border-zinc-800 mb-6 no-scrollbar">
-                {(["流程模板", "工程流程", "專案流程", "採購流程", "業務流程"] as const).map(tab => (
+                {(["流程模板", "工程流程", "專案流程", "業務流程", "結構流程", "行政流程"] as const).map(tab => (
                     <button
                         key={tab}
                         onClick={() => {

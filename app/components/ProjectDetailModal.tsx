@@ -219,8 +219,9 @@ export default function ProjectDetailModal({
 
     // Drag and Drop state
     const [draggedStepIndex, setDraggedStepIndex] = useState<number | null>(null);
-    // Add Item state
-    const [selectedToAddNodeId, setSelectedToAddNodeId] = useState<string>("");
+    // Add Flow Step state
+    const [isAddingStep, setIsAddingStep] = useState(false);
+    const [stepForm, setStepForm] = useState({ nodeId: "", name: "", lane: "專案" as any, baseline: "" });
 
     // Delay Reason Modal state
     const [delayModalConfig, setDelayModalConfig] = useState<{ projectId: string, stepId: string, delay_override: boolean, delay_reason: string } | null>(null);
@@ -382,29 +383,26 @@ export default function ProjectDetailModal({
     };
 
     const handleUpdateStepStatus = (projectId: string, stepId: string, newStatus: "未開始" | "進行中" | "完成" | "卡關") => {
+        const todayStr = new Date().toISOString().split("T")[0];
+
         setProjects(prev => prev.map(p => {
             if (p.project_id !== projectId) return p;
-
-            if (newStatus === "完成") {
-                const step = p.steps.find(s => s.id === stepId)!;
-                const todayStr = new Date().toISOString().split("T")[0];
-                const delayDays = Math.max(0, getDaysDiff(step.baseline_planned_end, todayStr));
-
-                // Open complete confirmation modal
-                setCompleteModalConfig({
-                    projectId,
-                    stepId,
-                    actualEnd: todayStr,
-                    delayDays,
-                    delayReason: step.delay_reason || "",
-                    baselineEnd: step.baseline_planned_end
-                });
-                return p;
-            }
-
             const newSteps = p.steps.map(s => {
                 if (s.id !== stepId) return s;
-                return { ...s, status: newStatus, actual_end: undefined, updated_at: new Date().toISOString().split("T")[0] };
+                const updatedStep = {
+                    ...s,
+                    status: newStatus,
+                    updated_at: new Date().toISOString()
+                };
+
+                if (newStatus === "完成") {
+                    updatedStep.actual_end = s.actual_end || todayStr;
+                    updatedStep.delay_days = Math.max(0, getDaysDiff(s.baseline_planned_end, updatedStep.actual_end));
+                } else {
+                    updatedStep.actual_end = undefined;
+                    updatedStep.delay_days = 0;
+                }
+                return updatedStep;
             });
             return recalculateProjectDates({ ...p, steps: newSteps });
         }));
@@ -488,26 +486,34 @@ export default function ProjectDetailModal({
     }, [selectedProject]);
 
     // --- Add Step ---
-    const handleAddStep = (projectId: string) => {
-        if (!selectedToAddNodeId) return;
-        const node = flowTemplate.find(n => n.id === selectedToAddNodeId);
-        if (!node) return;
+    const handleAddStepWithBaseline = (projectId: string) => {
+        const { name, lane, baseline, nodeId } = stepForm;
+        if (!name || !baseline) return;
+
         setProjects(prev => prev.map(p => {
             if (p.project_id !== projectId) return p;
+
+            // If it's a library node, we might want to keep its original ID prefix or properties
+            // but for simplicity and to avoid ID collisions if same node added twice, 
+            // we use the same ID generation or prefix
+            const stepId = nodeId || `CUSTOM-${Date.now()}`;
+
             const newStep = {
-                id: node.id,
-                name: node.name,
-                lane: node.lane,
-                offset_days: node.offset_days,
-                baseline_planned_end: addDays(p.start_date, node.offset_days),
-                current_planned_end: addDays(p.start_date, node.offset_days),
+                id: stepId,
+                name,
+                lane,
+                offset_days: getDaysDiff(p.start_date, baseline),
+                baseline_planned_end: baseline,
+                current_planned_end: baseline,
                 status: "未開始" as const,
-                is_core: node.is_core,
                 updated_at: new Date().toISOString(),
+                // If it was from library, mark as core based on template if available
+                is_core: flowTemplate.find(n => n.id === nodeId)?.is_core ?? false
             };
             return recalculateProjectDates({ ...p, steps: [...p.steps, newStep] });
         }));
-        setSelectedToAddNodeId("");
+        setIsAddingStep(false);
+        setStepForm({ nodeId: "", name: "", lane: "專案", baseline: "" });
     };
 
     // --- Drag and Drop handlers ---
@@ -593,117 +599,108 @@ export default function ProjectDetailModal({
                                         <br />修改「Offset 天數」將自動推算預計日期；修改「預計日期」將自動反推天數。可以拖曳列來排序。
                                     </div>
 
-                                    <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3 bg-zinc-100/50 dark:bg-zinc-800/50 p-3 rounded-lg border border-zinc-200 dark:border-zinc-700">
-                                        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300 shrink-0">＋新增流程項目：</span>
-                                        <select
-                                            className="rounded flex-1 border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                                            value={selectedToAddNodeId}
-                                            onChange={(e) => setSelectedToAddNodeId(e.target.value)}
-                                        >
-                                            <option value="">-- 請選擇流程庫項目 --</option>
-                                            {availableNodesToAdd.map(node => (
-                                                <option key={node.id} value={node.id}>
-                                                    {node.name} ({node.lane}) {node.is_core ? '' : '[可選]'}
-                                                </option>
-                                            ))}
-                                        </select>
-                                        <button
-                                            onClick={() => handleAddStep(selectedProject.project_id)}
-                                            disabled={!selectedToAddNodeId}
-                                            className="rounded bg-zinc-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
-                                        >
-                                            新增
-                                        </button>
-                                    </div>
-
-                                    <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden dark:border-zinc-800 dark:bg-zinc-900 shadow-sm relative">
-
-                                        {/* 橫向捲動控制條 (跟隨這塊表格區域的 sticky top) */}
-                                        <div className="sticky top-0 z-20 bg-zinc-50 dark:bg-zinc-800/80 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800 p-2 flex items-center justify-between gap-4">
-                                            <div className="flex items-center gap-2 text-xs text-zinc-500 font-medium">
-                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
-                                                橫向捲動查看詳細欄位
-                                            </div>
-                                            <div className="flex items-center gap-3 flex-1 max-w-sm ml-auto">
-                                                <button onClick={() => scrollByAmount(-240)} className="rounded p-1 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 transition-colors">
-                                                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                                                </button>
-                                                <input
-                                                    type="range"
-                                                    min="0"
-                                                    max="100"
-                                                    value={scrollProgress}
-                                                    onChange={handleScrollSlider}
-                                                    className="flex-1 accent-zinc-500 hover:accent-zinc-600 transition-all cursor-pointer"
-                                                />
-                                                <button onClick={() => scrollByAmount(240)} className="rounded p-1 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 transition-colors">
-                                                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                                                </button>
-                                            </div>
+                                    <div className="mb-6 flex flex-col gap-4 bg-zinc-100/50 dark:bg-zinc-800/50 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300">流程項目管理</span>
+                                            <button
+                                                onClick={() => setIsAddingStep(!isAddingStep)}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-500 transition-colors shadow-sm"
+                                            >
+                                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                                </svg>
+                                                {isAddingStep ? "取消新增" : "新增流程項目"}
+                                            </button>
                                         </div>
 
-                                        <div className="overflow-x-auto" ref={stepsScrollerRef} onScroll={handleScroll}>
-                                            <table className="w-full text-left text-sm whitespace-nowrap">
-                                                <thead className="bg-zinc-50 text-zinc-500 dark:bg-zinc-800/50 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
-                                                    <tr>
-                                                        <th className="px-4 py-3 font-semibold w-12 text-center">序號</th>
-                                                        <th className="px-4 py-3 font-semibold">節點名稱</th>
-                                                        <th className="px-4 py-3 font-semibold w-24 text-center">線別</th>
-                                                        <th className="px-4 py-3 font-semibold w-40 text-center">狀態</th>
-                                                        <th className="px-4 py-3 font-semibold w-24">Offset</th>
-                                                        <th className="px-4 py-3 font-semibold w-32">原定 Baseline</th>
-                                                        <th className="px-4 py-3 font-semibold w-32">目前 Current</th>
-                                                        <th className="px-4 py-3 font-semibold w-32">實際 Actual</th>
-                                                        <th className="px-4 py-3 font-semibold w-20 text-center">操作</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                                                    {selectedProject.steps.map((step, idx) => (
-                                                        <tr
-                                                            key={step.id}
-                                                            id={`step-row-${step.id}`}
-                                                            className={`hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors ${draggedStepIndex === idx ? 'opacity-50 bg-zinc-100 dark:bg-zinc-800' : ''}`}
-                                                            draggable
-                                                            onDragStart={(e) => handleDragStart(e, idx)}
-                                                            onDragOver={(e) => handleDragOver(e, idx)}
-                                                            onDrop={(e) => handleDrop(e, idx, selectedProject.project_id)}
-                                                            onDragEnd={() => setDraggedStepIndex(null)}
-                                                        >
-                                                            <td className="px-4 py-2 text-center font-mono text-zinc-400 cursor-move" title="拖曳以排序">
-                                                                <div className="flex items-center gap-1 justify-center">
-                                                                    <svg className="w-4 h-4 text-zinc-300 dark:text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" /></svg>
-                                                                    {String(idx + 1).padStart(2, '0')}
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-4 py-2 font-medium text-zinc-900 dark:text-zinc-100 truncate max-w-[200px]" title={step.name}>
-                                                                {step.name}
-                                                                <div className="flex flex-wrap gap-1 mt-1">
-                                                                    {/* 系統逾期即時判斷 (未完成) */}
-                                                                    {step.status !== "完成" && getDaysDiff(new Date().toISOString().split("T")[0], step.current_planned_end) < 0 && (
-                                                                        <span className="inline-flex items-center rounded-md bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700 ring-1 ring-inset ring-red-600/10 dark:bg-red-900/20 dark:text-red-400">
-                                                                            目前卡關/逾期 ({Math.abs(getDaysDiff(new Date().toISOString().split("T")[0], step.current_planned_end))} 天)
-                                                                        </span>
-                                                                    )}
-                                                                    {/* 歷史逾期紀錄 (已完成) */}
-                                                                    {step.status === "完成" && step.delay_days && step.delay_days > 0 && (
-                                                                        <button onClick={() => setDelayModalConfig({ projectId: selectedProject.project_id, stepId: step.id, delay_override: step.delay_override || true, delay_reason: step.delay_reason || "" })} className="inline-flex items-center rounded-md bg-yellow-50 px-1.5 py-0.5 text-[10px] font-medium text-yellow-800 ring-1 ring-inset ring-yellow-600/20 dark:bg-yellow-900/20 dark:text-yellow-400 hover:bg-yellow-100 transition-colors title='點擊查看逾期原因'">
-                                                                            曾逾期 {step.delay_days} 天
-                                                                        </button>
-                                                                    )}
-                                                                    {/* 人工延遲判斷 */}
-                                                                    {step.delay_override && step.status !== "完成" && (
-                                                                        <button onClick={() => setDelayModalConfig({ projectId: selectedProject.project_id, stepId: step.id, delay_override: step.delay_override || false, delay_reason: step.delay_reason || "" })} className="inline-flex items-center rounded-md bg-yellow-50 px-1.5 py-0.5 text-[10px] font-medium text-yellow-800 ring-1 ring-inset ring-yellow-600/20 dark:bg-yellow-900/20 dark:text-yellow-400 hover:bg-yellow-100 transition-colors">
-                                                                            已標記延遲
-                                                                        </button>
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-4 py-2 text-center text-zinc-500">{step.lane}</td>
-                                                            <td className="px-4 py-2 text-center flex items-center justify-center gap-1">
+                                        {isAddingStep && (
+                                            <div className="mt-2 pt-4 border-t border-zinc-200 dark:border-zinc-700 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end animate-in fade-in slide-in-from-top-2 duration-200">
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-zinc-500 mb-1 leading-none">節點選擇 (流程庫)</label>
+                                                    <select
+                                                        value={stepForm.nodeId}
+                                                        onChange={e => {
+                                                            const nodeId = e.target.value;
+                                                            const node = flowTemplate.find(n => n.id === nodeId);
+                                                            setStepForm(prev => ({
+                                                                ...prev,
+                                                                nodeId,
+                                                                name: node ? node.name : prev.name,
+                                                                lane: node ? node.lane : prev.lane
+                                                            }));
+                                                        }}
+                                                        className="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 focus:ring-1 focus:ring-blue-500 outline-none"
+                                                    >
+                                                        <option value="">-- 自定義名稱 --</option>
+                                                        {["工程", "專案", "業務", "結構", "行政"].map(dept => (
+                                                            <optgroup key={dept} label={dept}>
+                                                                {flowTemplate.filter(n => n.lane === dept).map(n => (
+                                                                    <option key={n.id} value={n.id}>{n.name}</option>
+                                                                ))}
+                                                            </optgroup>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-zinc-500 mb-1 leading-none">節點名稱 (確認)</label>
+                                                    <input
+                                                        type="text"
+                                                        value={stepForm.name}
+                                                        onChange={e => setStepForm(prev => ({ ...prev, name: e.target.value }))}
+                                                        placeholder="自定義名稱..."
+                                                        className="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 focus:ring-1 focus:ring-blue-500 outline-none"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-zinc-500 mb-1 leading-none">原定日期 (Baseline)</label>
+                                                    <input
+                                                        type="date"
+                                                        value={stepForm.baseline}
+                                                        onChange={e => setStepForm(prev => ({ ...prev, baseline: e.target.value }))}
+                                                        className="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 focus:ring-1 focus:ring-blue-500 outline-none"
+                                                    />
+                                                </div>
+                                                <button
+                                                    onClick={() => handleAddStepWithBaseline(selectedProject.project_id)}
+                                                    disabled={!stepForm.name || !stepForm.baseline}
+                                                    className="w-full rounded bg-zinc-900 px-4 py-1.5 text-sm font-bold text-white hover:bg-zinc-800 disabled:opacity-50 transition-all shadow-sm active:scale-95"
+                                                >
+                                                    確定新增
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* 新版流程列表：直式兩行版型 */}
+                                    <div className="space-y-3">
+                                        {selectedProject.steps.map((step, idx) => (
+                                            <div
+                                                key={step.id}
+                                                id={`step-row-${step.id}`}
+                                                className={`group relative bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-sm hover:border-zinc-400 dark:hover:border-zinc-600 transition-all ${draggedStepIndex === idx ? 'opacity-50 ring-2 ring-blue-500' : ''}`}
+                                                draggable
+                                                onDragStart={(e) => handleDragStart(e, idx)}
+                                                onDragOver={(e) => handleDragOver(e, idx)}
+                                                onDrop={(e) => handleDrop(e, idx, selectedProject.project_id)}
+                                                onDragEnd={() => setDraggedStepIndex(null)}
+                                            >
+                                                {/* Header Line */}
+                                                <div className="flex items-start justify-between gap-4 mb-3">
+                                                    <div className="flex items-start gap-3 min-w-0">
+                                                        <div className="mt-1 shrink-0 text-[10px] font-mono text-zinc-400 cursor-move bg-zinc-50 dark:bg-zinc-800 rounded px-1.5 py-0.5 border border-zinc-200 dark:border-zinc-700 flex items-center gap-1">
+                                                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" /></svg>
+                                                            {String(idx + 1).padStart(2, '0')}
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                <h4 className="text-base font-bold text-zinc-900 dark:text-zinc-100 truncate">{step.name}</h4>
+                                                                <span className="text-[10px] font-bold px-1.5 py-0.5 bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 rounded">
+                                                                    {step.lane}
+                                                                </span>
                                                                 <select
                                                                     value={step.status}
                                                                     onChange={(e) => handleUpdateStepStatus(selectedProject.project_id, step.id, e.target.value as any)}
-                                                                    className={`rounded text-xs font-medium px-2 py-1 focus:outline-none ring-1 ring-inset ${step.status === '完成' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/20' :
+                                                                    className={`rounded-md text-[10px] font-bold px-2 py-0.5 focus:outline-none ring-1 ring-inset ${step.status === '完成' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/20' :
                                                                         step.status === '進行中' ? 'bg-blue-50 text-blue-700 ring-blue-600/20 dark:bg-blue-500/10 dark:text-blue-400 dark:ring-blue-500/20' :
                                                                             step.status === '卡關' ? 'bg-orange-50 text-orange-700 ring-orange-600/20 dark:bg-orange-500/10 dark:text-orange-400 dark:ring-orange-500/20' :
                                                                                 'bg-zinc-50 text-zinc-600 ring-zinc-500/10 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700'
@@ -714,77 +711,85 @@ export default function ProjectDetailModal({
                                                                     <option value="卡關">卡關</option>
                                                                     <option value="完成">完成</option>
                                                                 </select>
-                                                                {step.status !== "完成" && (
-                                                                    <button
-                                                                        onClick={() => setDelayModalConfig({ projectId: selectedProject.project_id, stepId: step.id, delay_override: step.delay_override || false, delay_reason: step.delay_reason || "" })}
-                                                                        className="text-zinc-400 hover:text-amber-600 dark:hover:text-amber-400 p-1 rounded transition-colors"
-                                                                        title="設定延遲原因"
-                                                                    >
-                                                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                            </div>
+
+                                                            <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                                                {step.status !== "完成" && getDaysDiff(new Date().toISOString().split("T")[0], step.current_planned_end) < 0 && (
+                                                                    <span className="inline-flex items-center rounded-md bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700 ring-1 ring-inset ring-red-600/10 dark:bg-red-900/20 dark:text-red-400">
+                                                                        逾期 {Math.abs(getDaysDiff(new Date().toISOString().split("T")[0], step.current_planned_end))} 天
+                                                                    </span>
+                                                                )}
+                                                                {step.status === "完成" && step.delay_days && step.delay_days > 0 && (
+                                                                    <button onClick={() => setDelayModalConfig({ projectId: selectedProject.project_id, stepId: step.id, delay_override: step.delay_override || true, delay_reason: step.delay_reason || "" })} className="text-[10px] font-medium text-yellow-800 bg-yellow-50 px-1.5 py-0.5 rounded ring-1 ring-inset ring-yellow-600/20 dark:bg-yellow-900/20 dark:text-yellow-400">
+                                                                        曾逾期 {step.delay_days} 天
                                                                     </button>
                                                                 )}
-                                                            </td>
-                                                            <td className="px-4 py-2">
-                                                                <input
-                                                                    type="number"
-                                                                    value={step.offset_days}
-                                                                    onChange={(e) => handleUpdateStep(selectedProject.project_id, step.id, "offset_days", e.target.value)}
-                                                                    className="w-16 rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 text-center"
-                                                                />
-                                                            </td>
-                                                            <td className="px-4 py-2">
-                                                                <div className="text-zinc-500 dark:text-zinc-400">{step.baseline_planned_end}</div>
-                                                            </td>
-                                                            <td className="px-4 py-2">
-                                                                <div className="text-amber-700 dark:text-amber-500 font-medium">{step.current_planned_end}</div>
-                                                            </td>
-                                                            <td className="px-4 py-2">
-                                                                {step.actual_end ? (
-                                                                    <div className="flex flex-col gap-1 items-start">
-                                                                        <div className="text-emerald-700 dark:text-emerald-500 font-medium">{step.actual_end}</div>
-                                                                        <div className="flex gap-2">
-                                                                            <button
-                                                                                onClick={() => setEditDateModalConfig({
-                                                                                    projectId: selectedProject.project_id,
-                                                                                    stepId: step.id,
-                                                                                    beforeEnd: step.actual_end || "",
-                                                                                    afterEnd: step.actual_end || "",
-                                                                                    note: ""
-                                                                                })}
-                                                                                className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5"
-                                                                            >
-                                                                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                                                                修改日期
-                                                                            </button>
-                                                                            {step.corrections && step.corrections.length > 0 && (
-                                                                                <button
-                                                                                    onClick={() => setHistoryModalConfig({ stepName: step.name, corrections: step.corrections! })}
-                                                                                    className="text-[10px] text-zinc-500 hover:underline flex items-center gap-0.5"
-                                                                                >
-                                                                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                                                    改期紀錄({step.corrections.length})
-                                                                                </button>
-                                                                            )}
-                                                                        </div>
-                                                                    </div>
-                                                                ) : (
-                                                                    <div className="text-zinc-300 dark:text-zinc-600">-</div>
-                                                                )}
-                                                            </td>
-                                                            <td className="px-4 py-2 text-center">
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-1 shrink-0">
+                                                        <button
+                                                            onClick={() => setDelayModalConfig({ projectId: selectedProject.project_id, stepId: step.id, delay_override: step.delay_override || false, delay_reason: step.delay_reason || "" })}
+                                                            className="p-1.5 text-zinc-400 hover:text-amber-600 transition-colors"
+                                                            title="原因/紀錄"
+                                                        >
+                                                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleRemoveStep(selectedProject.project_id, step.id)}
+                                                            className="p-1.5 text-zinc-400 hover:text-red-500 transition-colors"
+                                                            title="移除"
+                                                        >
+                                                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Date Line */}
+                                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 px-1">
+                                                    <div>
+                                                        <div className="text-[10px] font-bold text-zinc-400 mb-0.5">OFFSET</div>
+                                                        <input
+                                                            type="number"
+                                                            value={step.offset_days}
+                                                            onChange={(e) => handleUpdateStep(selectedProject.project_id, step.id, "offset_days", e.target.value)}
+                                                            className="w-16 rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-900 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[10px] font-bold text-zinc-400 mb-0.5 uppercase tracking-wider">Baseline (原定)</div>
+                                                        <div className="text-xs text-zinc-600 dark:text-zinc-400 font-medium">{step.baseline_planned_end}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[10px] font-bold text-zinc-400 mb-0.5 uppercase tracking-wider">Current (預計)</div>
+                                                        <div className="text-xs text-amber-600 dark:text-amber-500 font-bold">{step.current_planned_end}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[10px] font-bold text-zinc-400 mb-0.5 uppercase tracking-wider">Actual (實際)</div>
+                                                        {step.actual_end ? (
+                                                            <div className="flex flex-col">
+                                                                <span className="text-xs text-emerald-600 dark:text-emerald-500 font-bold">{step.actual_end}</span>
                                                                 <button
-                                                                    onClick={() => handleRemoveStep(selectedProject.project_id, step.id)}
-                                                                    className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-500/10 p-1.5 rounded transition-colors"
-                                                                    title="移除項目"
+                                                                    onClick={() => setEditDateModalConfig({
+                                                                        projectId: selectedProject.project_id,
+                                                                        stepId: step.id,
+                                                                        beforeEnd: step.actual_end || "",
+                                                                        afterEnd: step.actual_end || "",
+                                                                        note: ""
+                                                                    })}
+                                                                    className="text-[9px] text-blue-500 hover:underline mt-0.5 text-left"
                                                                 >
-                                                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                                                    修改日期
                                                                 </button>
-                                                            </td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-xs text-zinc-300 dark:text-zinc-700 font-medium italic">- 未核定 -</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
                                     </div>
                                 </>
                             )}

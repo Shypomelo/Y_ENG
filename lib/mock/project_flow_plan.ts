@@ -14,7 +14,7 @@ export type DateCorrectionLog = {
 export type ProjectFlowStepPlan = {
     id: string; // P-002..P-008
     name: string;
-    lane: "工程" | "專案" | "採購" | "業務";
+    lane: "工程" | "專案" | "業務" | "結構" | "行政";
     offset_days: number;
     baseline_planned_end: string; // YYYY-MM-DD
     current_planned_end: string;  // YYYY-MM-DD
@@ -40,6 +40,8 @@ export type ProjectFlowPlan = {
         structural?: string;
         admin?: string;
         sales?: string;
+        vendor_structure?: string;
+        vendor_power?: string;
     };
     enginePlan?: {
         entry_date?: string;

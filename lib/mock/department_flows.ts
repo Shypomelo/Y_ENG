@@ -1,5 +1,5 @@
-export type Dept = "工程" | "專案" | "採購" | "業務";
-export type DeptCode = "E" | "P" | "S" | "B";
+export type Dept = "工程" | "專案" | "業務" | "結構" | "行政";
+export type DeptCode = "E" | "P" | "A" | "B" | "ST";
 
 export type DeptStep = {
     id: string;
@@ -318,13 +318,13 @@ export const departmentFlows: Record<DeptCode, DepartmentFlow> = {
             }
         ]
     },
-    "S": {
-        "dept": "採購",
-        "code": "S",
+    "A": {
+        "dept": "行政",
+        "code": "A",
         "steps": [
             {
                 "id": "S-001",
-                "dept": "採購",
+                "dept": "行政",
                 "name": "採購需求彙整",
                 "depends_on": [
                     "P-005"
@@ -341,7 +341,7 @@ export const departmentFlows: Record<DeptCode, DepartmentFlow> = {
             },
             {
                 "id": "S-002",
-                "dept": "採購",
+                "dept": "行政",
                 "name": "發包/詢比議價/下單",
                 "depends_on": [
                     "B-004",
@@ -359,7 +359,7 @@ export const departmentFlows: Record<DeptCode, DepartmentFlow> = {
             },
             {
                 "id": "S-003",
-                "dept": "採購",
+                "dept": "行政",
                 "name": "到貨追蹤/點交驗收",
                 "depends_on": [
                     "S-002"
@@ -449,5 +449,10 @@ export const departmentFlows: Record<DeptCode, DepartmentFlow> = {
                 "is_core": true
             }
         ]
+    },
+    "ST": {
+        "dept": "結構",
+        "code": "ST",
+        "steps": []
     }
 };
