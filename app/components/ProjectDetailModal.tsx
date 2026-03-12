@@ -21,6 +21,7 @@ const PROCURE_STATUS_STYLE: Record<ProcureStatus, string> = {
 
 // --- Components ---
 const ProcureItemsBlock = ({ selectedProject, projects, setProjects }: { selectedProject: ProjectFlowPlan, projects: ProjectFlowPlan[], setProjects: React.Dispatch<React.SetStateAction<ProjectFlowPlan[]>> }) => {
+    const { isMounted } = useProjects();
     const [showAll, setShowAll] = useState(false);
     const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({});
     const [openSelectors, setOpenSelectors] = useState<Record<string, boolean>>({});
@@ -37,7 +38,8 @@ const ProcureItemsBlock = ({ selectedProject, projects, setProjects }: { selecte
     };
 
     const handleAdd = () => {
-        const newGroup = { id: `PG-${Date.now()}`, items: [] as string[], status: "待請購" as ProcureStatus };
+        if (!isMounted) return;
+        const newGroup = { id: `PG-${Math.random().toString(36).substr(2, 9)}`, items: [] as string[], status: "待請購" as ProcureStatus };
         updateProject({ procureGroups: [...groups, newGroup] });
         setOpenSelectors(prev => ({ ...prev, [newGroup.id]: true }));
     };
@@ -496,7 +498,7 @@ export default function ProjectDetailModal({
             // If it's a library node, we might want to keep its original ID prefix or properties
             // but for simplicity and to avoid ID collisions if same node added twice, 
             // we use the same ID generation or prefix
-            const stepId = nodeId || `CUSTOM-${Date.now()}`;
+            const stepId = nodeId || `CUSTOM-${Math.random().toString(36).substr(2, 9)}`;
 
             const newStep = {
                 id: stepId,

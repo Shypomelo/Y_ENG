@@ -21,8 +21,8 @@ export default function SettingsPage() {
         setNewPerson(prev => ({ ...prev, [dept]: "" }));
     };
 
-    const handleRemovePerson = (dept: keyof PeopleByDept, name: string) => {
-        removePerson(dept, name);
+    const handleRemovePerson = async (dept: keyof PeopleByDept, id: string) => {
+        await removePerson(dept, id);
     };
 
     const handleAddVendor = (type: keyof VendorsByType) => {
@@ -32,8 +32,8 @@ export default function SettingsPage() {
         setNewVendor(prev => ({ ...prev, [type]: "" }));
     };
 
-    const handleRemoveVendor = (type: keyof VendorsByType, name: string) => {
-        removeVendor(type, name);
+    const handleRemoveVendor = async (type: keyof VendorsByType, id: string) => {
+        await removeVendor(type, id);
     };
 
     return (
@@ -83,11 +83,11 @@ export default function SettingsPage() {
                                     </button>
                                 </div>
                                 <div className="space-y-1 max-h-[200px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-zinc-200 dark:scrollbar-thumb-zinc-700">
-                                    {peopleByDept[dept].map(name => (
-                                        <div key={name} className="group flex items-center justify-between p-2 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
-                                            <span className="text-sm text-zinc-700 dark:text-zinc-300">{name}</span>
+                                    {peopleByDept[dept].map(person => (
+                                        <div key={person.id} className="group flex items-center justify-between p-2 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                                            <span className="text-sm text-zinc-700 dark:text-zinc-300">{person.name}</span>
                                             <button
-                                                onClick={() => handleRemovePerson(dept, name)}
+                                                onClick={() => handleRemovePerson(dept, person.id)}
                                                 className="p-1 text-zinc-400 hover:text-red-500 transition-all pointer-events-auto"
                                                 title="刪除"
                                             >
@@ -147,11 +147,11 @@ export default function SettingsPage() {
                                     </button>
                                 </div>
                                 <div className="space-y-1 max-h-[200px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-zinc-200 dark:scrollbar-thumb-zinc-700">
-                                    {vendorsByType[type].map(name => (
-                                        <div key={name} className="group flex items-center justify-between p-2 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
-                                            <span className="text-sm text-zinc-700 dark:text-zinc-300">{name}</span>
+                                    {vendorsByType[type].map(vendor => (
+                                        <div key={vendor.id} className="group flex items-center justify-between p-2 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                                            <span className="text-sm text-zinc-700 dark:text-zinc-300">{vendor.name}</span>
                                             <button
-                                                onClick={() => handleRemoveVendor(type, name)}
+                                                onClick={() => handleRemoveVendor(type, vendor.id)}
                                                 className="p-1 text-zinc-400 hover:text-red-500 transition-all pointer-events-auto"
                                                 title="刪除"
                                             >

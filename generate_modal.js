@@ -6,7 +6,7 @@ let lines = content.split('\n');
 
 // imports + Procurement Options + ProcureItemsBlock + getDaysDiff + addDays
 const importsEndIndex = lines.findIndex(l => l.startsWith('export default function ProjectsPage()'));
-const headerLines = lines.slice(0, importsEndIndex).join('\n');
+const headerLines = lines.slice(0, importsEndIndex).filter(l => !l.includes('ProjectDetailModal')).join('\n');
 
 const modalHeader = `
 export default function ProjectDetailModal({
@@ -84,7 +84,10 @@ const detailModalStartIndex = lines.findIndex(l => l.includes(detailModalStartSt
 const closeModalStartStr = '{/* C) 結案彈窗 */}';
 const closeModalStartIndex = lines.findIndex(l => l.includes(closeModalStartStr));
 
-let modalJsx = lines.slice(detailModalStartIndex, closeModalStartIndex).join('\n');
+let modalJsx = '';
+if (detailModalStartIndex !== -1 && closeModalStartIndex !== -1) {
+    modalJsx = lines.slice(detailModalStartIndex, closeModalStartIndex).join('\n');
+}
 
 // Change `showDetailModal` to `isOpen` and `setShowDetailModal(false)` to `onClose()`
 modalJsx = modalJsx.replace(/showDetailModal/g, 'isOpen').replace(/setShowDetailModal\(false\)/g, 'onClose()');
@@ -96,12 +99,15 @@ const delayModalStartIndex = lines.findIndex(l => l.includes(delayModalStartStr)
 const wizardModalStartStr = '{/* Create Project Wizard */}';
 const wizardModalStartIndex = lines.findIndex(l => l.includes(wizardModalStartStr));
 
-let otherModalsJsx = lines.slice(delayModalStartIndex, wizardModalStartIndex).join('\n');
+let otherModalsJsx = '';
+if (delayModalStartIndex !== -1 && wizardModalStartIndex !== -1) {
+    otherModalsJsx = lines.slice(delayModalStartIndex, wizardModalStartIndex).join('\n');
+}
 
 
 // Since JS string manipulation might break, we can just write out the modal component structure cleanly:
-const newContent = `\${headerLines}
-\${modalHeader}
+const newContent = `${headerLines}
+${modalHeader}
     // Synchronization for horizontal scrolling
     const stepsScrollerRef = useRef<HTMLDivElement>(null);
     const [scrollProgress, setScrollProgress] = useState(0);
@@ -328,11 +334,11 @@ const newContent = `\${headerLines}
 
     return (
         <>
-            \${modalJsx}
-            \${otherModalsJsx}
+            ${modalJsx}
+            ${otherModalsJsx}
         </>
     );
 }
-\`;
+`;
 
 fs.writeFileSync('app/components/ProjectDetailModal.tsx', newContent);

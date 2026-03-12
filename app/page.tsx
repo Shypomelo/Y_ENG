@@ -18,7 +18,31 @@ export default function Home() {
       {/* 4 張入口卡片網格 */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:gap-6">
 
-        {/* 1. 專案狀態 */}
+        {/* 1. 排程 */}
+        <Link href="/schedule" className="group flex flex-col justify-between rounded-2xl bg-white p-6 shadow-sm ring-1 ring-zinc-200 transition-all hover:shadow-md hover:ring-zinc-300 dark:bg-zinc-900 dark:ring-zinc-800 dark:hover:ring-zinc-700">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                排程
+              </h2>
+              <svg className="h-5 w-5 text-zinc-400 group-hover:text-blue-600 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col">
+                <span className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">3</span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">今日事件</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">12</span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">本週事件</span>
+              </div>
+            </div>
+          </div>
+        </Link>
+
+        {/* 2. 專案狀態 */}
         <Link href="/projects" className="group flex flex-col justify-between rounded-2xl bg-white p-6 shadow-sm ring-1 ring-zinc-200 transition-all hover:shadow-md hover:ring-zinc-300 dark:bg-zinc-900 dark:ring-zinc-800 dark:hover:ring-zinc-700">
           <div>
             <div className="flex items-center justify-between mb-4">
@@ -41,30 +65,6 @@ export default function Home() {
               <div className="flex flex-col">
                 <span className="text-2xl font-bold text-amber-500 dark:text-amber-400">5</span>
                 <span className="text-xs text-zinc-500 dark:text-zinc-400">風險數</span>
-              </div>
-            </div>
-          </div>
-        </Link>
-
-        {/* 2. 排程 */}
-        <Link href="/schedule" className="group flex flex-col justify-between rounded-2xl bg-white p-6 shadow-sm ring-1 ring-zinc-200 transition-all hover:shadow-md hover:ring-zinc-300 dark:bg-zinc-900 dark:ring-zinc-800 dark:hover:ring-zinc-700">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                排程
-              </h2>
-              <svg className="h-5 w-5 text-zinc-400 group-hover:text-blue-600 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col">
-                <span className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">3</span>
-                <span className="text-xs text-zinc-500 dark:text-zinc-400">今日事件</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">12</span>
-                <span className="text-xs text-zinc-500 dark:text-zinc-400">本週事件</span>
               </div>
             </div>
           </div>

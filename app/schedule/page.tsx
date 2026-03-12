@@ -16,7 +16,18 @@ type ScheduleEvent = {
     daysUntilDue: number;
 };
 
+import * as actions from "./actions";
+import { DailySchedule } from "../../lib/types/database";
+import WeeklyView from "./components/WeeklyView";
+
 // --- Helper Functions ---
+const formatLocal = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
 const getDaysDiff = (date1: string, date2: string) => {
     const d1 = new Date(date1);
     const d2 = new Date(date2);
@@ -46,12 +57,41 @@ const getEventStatusText = (ev: ScheduleEvent) => {
 export default function SchedulePage() {
     const router = useRouter();
     const { projects } = useProjects();
-    const [activeTab, setActiveTab] = useState<"專案月曆" | "今天跑哪">("專案月曆");
+    const [activeTab, setActiveTab] = useState<"專案月曆" | "今天跑哪">("今天跑哪");
     const [activeDate, setActiveDate] = useState(new Date());
     const [selectedDateEvents, setSelectedDateEvents] = useState<{ date: string, events: ScheduleEvent[] } | null>(null);
 
     const [hoveredEvent, setHoveredEvent] = useState<{ ev: ScheduleEvent, x: number, y: number } | null>(null);
     const [clickedEvent, setClickedEvent] = useState<ScheduleEvent | null>(null);
+
+    const [dbSchedules, setDbSchedules] = useState<DailySchedule[]>([]);
+    const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
+
+    const fetchAllSchedules = async () => {
+        setIsLoadingSchedules(true);
+        try {
+            // Fetch a wide range for now to cover current view
+            const start = new Date();
+            start.setMonth(start.getMonth() - 3);
+            const end = new Date();
+            end.setMonth(end.getMonth() + 6);
+
+            const data = await actions.getSchedulesAction(
+                formatLocal(start),
+                formatLocal(end)
+            );
+            setDbSchedules(data);
+        } catch (error: any) {
+            console.error("Failed to fetch schedules", error);
+            alert(`讀取排程失敗：\n${error.message}`);
+        } finally {
+            setIsLoadingSchedules(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchAllSchedules();
+    }, []);
 
     const baseDate = useMemo(() => new Date(), []);
     const monthsRange = useMemo(() => {
@@ -66,7 +106,7 @@ export default function SchedulePage() {
     // --- Data Aggregation ---
     const allEvents = useMemo(() => {
         const events: ScheduleEvent[] = [];
-        const todayStr = new Date().toISOString().split("T")[0];
+        const todayStr = formatLocal(new Date());
 
         projects.forEach(project => {
             if (project.project_status === "已結案") return;
@@ -112,6 +152,8 @@ export default function SchedulePage() {
     const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        if (activeTab !== "專案月曆") return;
+
         observerRef.current = new IntersectionObserver(
             (entries) => {
                 const intersectingEntry = entries.find(entry => entry.isIntersecting);
@@ -128,16 +170,18 @@ export default function SchedulePage() {
         });
 
         return () => observerRef.current?.disconnect();
-    }, [monthsRange]);
+    }, [monthsRange, activeTab]);
 
     useEffect(() => {
-        const today = new Date();
-        const id = `month-${today.getFullYear()}-${today.getMonth()}`;
-        const el = monthRefs.current.get(id);
-        if (el) {
-            el.scrollIntoView({ block: 'start' });
+        if (activeTab === "專案月曆") {
+            const today = new Date();
+            const id = `month-${today.getFullYear()}-${today.getMonth()}`;
+            const el = monthRefs.current.get(id);
+            if (el) {
+                el.scrollIntoView({ block: 'start' });
+            }
         }
-    }, []);
+    }, [activeTab]);
 
     const handleToday = () => {
         const today = new Date();
@@ -156,20 +200,24 @@ export default function SchedulePage() {
             <div className="flex flex-col md:flex-row items-start md:items-end justify-between mb-4 gap-4 shrink-0">
                 <div className="flex items-baseline gap-3">
                     <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                        {activeMonth + 1}月排程
+                        {activeTab === "專案月曆" ? `${activeMonth + 1}月排程` : "今天跑哪"}
                     </h1>
-                    <span className="text-zinc-500 font-medium dark:text-zinc-400">
-                        {activeYear} 年 / {String(activeMonth + 1).padStart(2, '0')} 月
-                    </span>
+                    {activeTab === "專案月曆" && (
+                        <span className="text-zinc-500 font-medium dark:text-zinc-400">
+                            {activeYear} 年 / {String(activeMonth + 1).padStart(2, '0')} 月
+                        </span>
+                    )}
                 </div>
-                <button onClick={handleToday} className="px-4 py-2 font-medium rounded-md border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors text-zinc-800 dark:text-zinc-200">
-                    回到本月
-                </button>
+                {activeTab === "專案月曆" && (
+                    <button onClick={handleToday} className="px-4 py-2 font-medium rounded-md border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors text-zinc-800 dark:text-zinc-200">
+                        回到本月
+                    </button>
+                )}
             </div>
 
             {/* Bookmark Tabs */}
             <div className="flex overflow-x-auto border-b border-zinc-200 dark:border-zinc-800 mb-6 shrink-0 no-scrollbar">
-                {(["專案月曆", "今天跑哪"] as const).map(tab => (
+                {(["今天跑哪", "專案月曆"] as const).map(tab => (
                     <button
                         key={tab}
                         onClick={() => setActiveTab(tab)}
@@ -184,11 +232,11 @@ export default function SchedulePage() {
             </div>
 
             {activeTab === "今天跑哪" ? (
-                <div className="flex-1 flex items-center justify-center border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl">
-                    <div className="text-zinc-500 dark:text-zinc-400 flex flex-col items-center gap-2">
-                        <svg className="w-8 h-8 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-                        <span>今天跑哪功能開發中...</span>
-                    </div>
+                <div className="flex-1 min-h-0 overflow-hidden">
+                    <WeeklyView
+                        schedules={dbSchedules}
+                        refreshSchedules={fetchAllSchedules}
+                    />
                 </div>
             ) : (
                 <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
@@ -233,7 +281,7 @@ export default function SchedulePage() {
                                             {calendarDays.map((calDay, i) => {
                                                 if (!calDay.day || !calDay.dateStr) return <div key={`empty-${mi}-${i}`} className="bg-zinc-50/50 dark:bg-zinc-900/20" />;
 
-                                                const isToday = calDay.dateStr === new Date().toISOString().split("T")[0];
+                                                const isToday = calDay.dateStr === formatLocal(new Date());
                                                 const dayEvents = allEvents.filter(e => e.date === calDay.dateStr);
                                                 const displayEvents = dayEvents.slice(0, 3);
                                                 const moreCount = dayEvents.length - 3;
@@ -360,8 +408,8 @@ export default function SchedulePage() {
                     <div className="font-bold text-sm text-zinc-900 dark:text-zinc-100 mb-0.5">{hoveredEvent.ev.projectName}</div>
                     <div className="text-sm text-zinc-700 dark:text-zinc-300 mb-2">{hoveredEvent.ev.stepName}</div>
                     <div className={`text-xs font-bold px-2 py-1 rounded inline-block ${hoveredEvent.ev.daysUntilDue < 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-                            hoveredEvent.ev.daysUntilDue <= 14 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
-                                'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                        hoveredEvent.ev.daysUntilDue <= 14 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                            'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
                         }`}>
                         {getEventStatusText(hoveredEvent.ev)}
                     </div>
@@ -392,8 +440,8 @@ export default function SchedulePage() {
                             <div>
                                 <div className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">狀態</div>
                                 <div className={`text-sm font-bold px-2 py-1 rounded inline-block ${clickedEvent.daysUntilDue < 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-                                        clickedEvent.daysUntilDue <= 14 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
-                                            'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                    clickedEvent.daysUntilDue <= 14 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                                        'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
                                     }`}>
                                     {getEventStatusText(clickedEvent)}
                                 </div>
