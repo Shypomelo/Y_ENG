@@ -71,8 +71,14 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     const [projects, setProjects] = useState<ProjectFlowPlan[]>([]);
     const [peopleByDept, setPeopleByDept] = useState<PeopleByDept>(INITIAL_PEOPLE);
     const [vendorsByType, setVendorsByType] = useState<VendorsByType>(INITIAL_VENDORS);
-    const [flowTemplateOrder, setFlowTemplateOrder] = useState<FlowNode[]>(flowTemplate);
-    const [deptFlowConfig, setDeptFlowConfig] = useState<Record<DeptCode, DepartmentFlow>>(departmentFlows);
+    const [flowTemplateOrder, setFlowTemplateOrder] = useState<FlowNode[]>([]);
+    const [deptFlowConfig, setDeptFlowConfig] = useState<Record<DeptCode, DepartmentFlow>>({
+        E: { code: "E", dept: "工程", steps: [] },
+        P: { code: "P", dept: "專案", steps: [] },
+        B: { code: "B", dept: "業務", steps: [] },
+        ST: { code: "ST", dept: "結構", steps: [] },
+        A: { code: "A", dept: "行政", steps: [] }
+    });
     const [isLoadingStore, setIsLoadingStore] = useState(true);
     const [isMounted, setIsMounted] = useState(false);
 
@@ -183,25 +189,59 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
                             }
                         });
 
-                        if (baseFlowOrder.length > 0) setFlowTemplateOrder(baseFlowOrder);
-
-                        // Only override if DEPT config actually loaded something
-                        if (Object.values(baseDeptConfig).some(d => d.steps.length > 0)) {
-                            setDeptFlowConfig(baseDeptConfig);
-                        }
+                        setFlowTemplateOrder(baseFlowOrder);
+                        setDeptFlowConfig(baseDeptConfig);
                     }
 
+                    // Create a lookup for staff names by ID
+                    const staffIdMap: Record<string, string> = {};
+                    staffData.forEach((s: any) => {
+                        staffIdMap[s.id] = s.name;
+                    });
+
                     // Map Projects
-                    const mappedProjects: ProjectFlowPlan[] = dbProjects.map(item => ({
-                        project_id: item.project.id,
-                        project_name: item.project.name || "未命名案件",
-                        start_date: item.project.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-                        project_status: (item.project.status_flag as any) || "進行中",
-                        kWp: item.project.kwp || 0,
-                        isImportant: item.project.is_important || false,
-                        owners: (item.project.owners as any) || {},
-                        steps: item.steps.map(s => ({
-                            id: s.template_step_key || s.id,
+                    const mappedProjects: ProjectFlowPlan[] = dbProjects.map(item => {
+                        const proj = item.project;
+                        // Construct owners object for UI display using both JSON and UUID columns
+                        const owners: ProjectFlowPlan["owners"] = {
+                            ...(proj.owners as any || {}),
+                            // Priority to UUID columns converted to names
+                            pm: staffIdMap[proj.project_manager_id || ""] || (proj.owners as any)?.pm || "未指定",
+                            sales: staffIdMap[proj.sales_id || ""] || (proj.owners as any)?.sales || "未指定",
+                            structural: staffIdMap[proj.structure_id || ""] || (proj.owners as any)?.structural || "未指定",
+                            admin: staffIdMap[proj.admin_id || ""] || (proj.owners as any)?.admin || "未指定",
+                            engineering: (() => {
+                                const mappedName = staffIdMap[proj.engineer_id || ""] || (proj.owners as any)?.engineering || null;
+                                // 預設值邏輯：若為空或未指定，則預設為「柚子」
+                                if (!mappedName || mappedName === "未指定") return "柚子";
+                                // 別名處理：子佑 -> 柚子
+                                if (mappedName === "子佑") return "柚子";
+                                return mappedName;
+                            })(),
+                            
+                            // IDs
+                            engineer_id: proj.engineer_id || undefined,
+                            pm_id: proj.project_manager_id || undefined,
+                            sales_id: proj.sales_id || undefined,
+                            structural_id: proj.structure_id || undefined,
+                            admin_id: proj.admin_id || undefined
+                        };
+
+                        return {
+                            project_id: proj.id,
+                            project_name: proj.name || "未命名案件",
+                            case_no: proj.case_no || undefined,
+                            address: proj.address || undefined,
+                            sale_type: proj.sale_type || undefined,
+                            start_date: proj.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+                            project_status: (proj.status_flag as any) || "進行中",
+                            kWp: proj.kwp || 0,
+                            isImportant: proj.is_important || false,
+                            projectedMeterDate: proj.projected_meter_date || undefined,
+                            owners: owners,
+                            steps: item.steps.map(s => ({
+                            id: s.template_step_key || `LOGIC-${s.id}`,
+                            db_id: s.id,
                             name: s.step_name || "未命名步驟",
                             lane: (s.owner_role as any) || "專案",
                             offset_days: (s.metadata as any)?.offset_days || 0,
@@ -212,7 +252,8 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
                             delay_reason: s.delay_reason || undefined,
                             updated_at: s.updated_at || new Date().toISOString()
                         }))
-                    }));
+                        };
+                    });
                     setProjects(mappedProjects);
                     localStorage.setItem("yjob_projects_v1", JSON.stringify(mappedProjects));
 
@@ -268,21 +309,23 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     }, [isLoadingStore]);
 
     // Debounced sync to Supabase for Flows
+    /* 暫時註解掉，避免開發環境下的 Fast Refresh 迴圈
     useEffect(() => {
         if (!isLoadingStore && initialSyncDone && typeof window !== "undefined") {
             const timer = setTimeout(() => {
+                console.log(`[Flow Sync] Starting debounced sync (Master: ${flowTemplateOrder.length} nodes, Depts: ${Object.values(deptFlowConfig).reduce((acc, d) => acc + d.steps.length, 0)} nodes)...`);
                 flowsRepo.syncAllFlowConfig(flowTemplateOrder, deptFlowConfig)
-                    .catch((error: any) => console.error("Debounced sync failed", {
-                        message: error?.message,
-                        details: error?.details,
-                        hint: error?.hint,
-                        code: error?.code,
-                        status: error?.status,
-                    }));
+                    .then(() => console.log("[Flow Sync] Debounced sync completed successfully."))
+                    .catch((error: any) => {
+                        console.error("[Flow Sync] Debounced sync failed!");
+                        console.error("Error Message:", error?.message);
+                        console.error("Full Error Object:", error);
+                    });
             }, 3000); // 3 秒 debounce
             return () => clearTimeout(timer);
         }
     }, [flowTemplateOrder, deptFlowConfig, isLoadingStore, initialSyncDone]);
+    */
 
     const updateProject = (projectId: string, patch: Partial<ProjectFlowPlan>) => {
         setProjects(prev => prev.map(p => p.project_id === projectId ? { ...p, ...patch } : p));

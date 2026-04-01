@@ -4,16 +4,24 @@ import { createAdminClient } from '../supabase/admin'
 import { Vendor } from '../types/database'
 
 export async function listVendorsByCategory(category?: string): Promise<Vendor[]> {
-    const supabase = createAdminClient()
-    let query = supabase.from('vendors').select('*').eq('is_active', true)
+    try {
+        const supabase = createAdminClient()
+        let query = supabase.from('vendors').select('*').eq('is_active', true)
 
-    if (category) {
-        query = query.eq('category', category)
+        if (category) {
+            query = query.eq('category', category)
+        }
+
+        const { data, error } = await query.order('created_at', { ascending: true })
+        if (error) {
+            console.error('listVendorsByCategory Error:', error.message);
+            return [];
+        }
+        return data || []
+    } catch (err: any) {
+        console.error('listVendorsByCategory Configuration Error:', err.message);
+        return [];
     }
-
-    const { data, error } = await query.order('created_at', { ascending: true })
-    if (error) throw error
-    return data || []
 }
 
 export async function createVendor(name: string, category: string): Promise<Vendor> {

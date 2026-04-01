@@ -4,6 +4,7 @@ import { useState, Fragment } from "react";
 import { useProjects } from "../providers/projects-store";
 import { FlowNode } from "../../lib/mock/flow_template";
 import { DeptCode, DeptStep, Dept } from "../../lib/mock/department_flows";
+import * as flowsRepo from "../../lib/repositories/flows";
 
 type TabName = "流程模板" | "工程流程" | "專案流程" | "業務流程" | "結構流程" | "行政流程";
 
@@ -22,6 +23,21 @@ export default function FlowTemplatePage() {
         deptFlowConfig: deptFlows,
         setDeptFlowConfig: setDeptFlows
     } = useProjects();
+
+    const [isSyncing, setIsSyncing] = useState(false);
+
+    const handleSync = async () => {
+        setIsSyncing(true);
+        try {
+            await flowsRepo.syncAllFlowConfig(nodes, deptFlows);
+            alert("流程設定已同步至資料庫");
+        } catch (err) {
+            console.error("Flow sync failed:", err);
+            alert("同步失敗，請檢查網路或權限");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
 
     const [activeTab, setActiveTab] = useState<TabName>("流程模板");
     const [showId, setShowId] = useState(false);
@@ -110,7 +126,11 @@ export default function FlowTemplatePage() {
     const updateDeptNode = (code: DeptCode, index: number, field: keyof DeptStep, value: any) => {
         setDeptFlows(prev => {
             const nextSteps = [...prev[code].steps];
-            nextSteps[index] = { ...nextSteps[index], [field]: value };
+            let val = value;
+            if (field === 'base_offset_days' || field === 'default_days') {
+                val = Math.max(0, value);
+            }
+            nextSteps[index] = { ...nextSteps[index], [field]: val };
             return { ...prev, [code]: { ...prev[code], steps: nextSteps } };
         });
     };
@@ -157,7 +177,8 @@ export default function FlowTemplatePage() {
             const nextSteps = [...prev[code].steps];
             const node = { ...nextSteps[stepIndex] };
             const tiers = [...(node.kw_tiers || [])];
-            tiers[tierIndex] = { ...tiers[tierIndex], [field]: value };
+            const val = field === 'days' ? Math.max(0, value) : value;
+            tiers[tierIndex] = { ...tiers[tierIndex], [field]: val };
             node.kw_tiers = tiers.sort((a, b) => a.maxKW - b.maxKW);
             nextSteps[stepIndex] = node;
             return { ...prev, [code]: { ...prev[code], steps: nextSteps } };
@@ -317,11 +338,20 @@ export default function FlowTemplatePage() {
                                                 </span>
                                             </div>
 
-                                            <div className="px-4 py-4 flex flex-col justify-center">
+                                            <div className="px-4 py-4 flex flex-col justify-center relative group-node">
                                                 <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{node.name}</span>
                                                 {node.deliverable && (
                                                     <span className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 truncate max-w-[400px]" title={node.deliverable}>{node.deliverable}</span>
                                                 )}
+                                                <button
+                                                    onDoubleClick={() => {
+                                                        setNodes(prev => reindex(prev.filter(n => n.id !== node.id)));
+                                                    }}
+                                                    className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-2 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all"
+                                                    title="雙擊移除此節點"
+                                                >
+                                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
@@ -372,8 +402,12 @@ export default function FlowTemplatePage() {
                                 <span className="text-sm text-zinc-500 dark:text-zinc-400">基本工期(天):</span>
                                 <input
                                     type="number"
+                                    min="0"
                                     value={newDeptNodeOffset}
-                                    onChange={(e) => setNewDeptNodeOffset(parseInt(e.target.value) || 0)}
+                                    onChange={(e) => {
+                                        const val = parseInt(e.target.value) || 0;
+                                        setNewDeptNodeOffset(Math.max(0, val));
+                                    }}
                                     className="w-20 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 text-center focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                                 />
                             </div>
@@ -405,202 +439,261 @@ export default function FlowTemplatePage() {
                                             此部門尚無流程節點
                                         </td>
                                     </tr>
-                                ) : currentSteps.map((step, index) => (
-                                    <Fragment key={step.id}>
-                                        <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
-                                            <td className="p-3 align-middle">
-                                                <input
-                                                    value={step.name}
-                                                    onChange={(e) => updateDeptNode(code, index, 'name', e.target.value)}
-                                                    className="w-full bg-transparent hover:border-zinc-300 dark:hover:border-zinc-600 focus:border-blue-500 focus:bg-white dark:focus:bg-zinc-900 border border-transparent rounded px-2 py-1 text-sm text-zinc-900 dark:text-zinc-100 transition-all font-medium"
-                                                />
-                                            </td>
-                                            {showId && (
-                                                <td className="p-3 align-middle text-zinc-600 dark:text-zinc-400 font-mono text-xs">
-                                                    {step.id}
+                                ) : currentSteps.map((step, index) => {
+                                    const isDragging = draggingId === step.id;
+                                    const isDragOver = dragOverId === step.id;
+
+                                    return (
+                                        <Fragment key={step.id}>
+                                            <tr 
+                                                className={`hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors 
+                                                ${isDragging ? 'opacity-50 grayscale' : ''}
+                                                ${isDragOver ? 'border-t-2 border-t-blue-500 bg-blue-50/20' : ''}
+                                                `}
+                                                draggable
+                                                onDragStart={(e) => {
+                                                    setDraggingId(step.id);
+                                                    e.dataTransfer.effectAllowed = "move";
+                                                }}
+                                                onDragOver={(e) => {
+                                                    e.preventDefault();
+                                                }}
+                                                onDragEnter={(e) => {
+                                                    e.preventDefault();
+                                                    if (draggingId && draggingId !== step.id) {
+                                                        setDragOverId(step.id);
+                                                    }
+                                                }}
+                                                onDrop={(e) => {
+                                                    e.preventDefault();
+                                                    if (!draggingId || draggingId === step.id) {
+                                                        setDraggingId(null);
+                                                        setDragOverId(null);
+                                                        return;
+                                                    }
+                                                    const fromIdx = currentSteps.findIndex(s => s.id === draggingId);
+                                                    const toIdx = currentSteps.findIndex(s => s.id === step.id);
+                                                    if (fromIdx !== -1 && toIdx !== -1) {
+                                                        const next = [...currentSteps];
+                                                        const [moved] = next.splice(fromIdx, 1);
+                                                        next.splice(toIdx, 0, moved);
+                                                        setDeptFlows(prev => ({
+                                                            ...prev,
+                                                            [code]: { ...prev[code], steps: next }
+                                                        }));
+                                                    }
+                                                    setDraggingId(null);
+                                                    setDragOverId(null);
+                                                }}
+                                                onDragEnd={() => {
+                                                    setDraggingId(null);
+                                                    setDragOverId(null);
+                                                }}
+                                            >
+                                                <td className="p-3 align-middle">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="cursor-grab active:cursor-grabbing text-zinc-300 hover:text-blue-500">
+                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" /></svg>
+                                                        </div>
+                                                        <input
+                                                            value={step.name}
+                                                            onChange={(e) => updateDeptNode(code, index, 'name', e.target.value)}
+                                                            className="w-full bg-transparent hover:border-zinc-300 dark:hover:border-zinc-600 focus:border-blue-500 focus:bg-white dark:focus:bg-zinc-900 border border-transparent rounded px-2 py-1 text-sm text-zinc-900 dark:text-zinc-100 transition-all font-medium"
+                                                        />
+                                                    </div>
                                                 </td>
-                                            )}
-                                            <td className="p-3 align-middle relative">
-                                                <button
-                                                    onClick={() => setOpenDeptDropdown(openDeptDropdown === step.id ? null : step.id)}
-                                                    className="w-full text-left bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 px-2 py-1.5 rounded text-sm min-h-[34px] flex flex-wrap gap-1 items-center justify-between hover:border-blue-400 transition-colors"
-                                                >
-                                                    <div className="flex flex-wrap gap-1 flex-1">
-                                                        {step.depends_on.length === 0 ? (
-                                                            <span className="text-zinc-400 italic text-xs">無前置</span>
-                                                        ) : (
-                                                            step.depends_on.map(depId => {
-                                                                const opt = options.find(o => o.value === depId);
-                                                                return (
-                                                                    <span key={depId} className="px-1.5 py-0.5 rounded text-xs bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 flex items-center gap-1 group/dep" title={opt ? opt.label : depId}>
-                                                                        {showId ? depId : (opt ? opt.originalStep.name.substring(0, 4) + '...' : depId)}
-                                                                        <span
-                                                                            onClick={(e) => { e.stopPropagation(); toggleDeptDependency(code, index, depId); }}
-                                                                            className="opacity-0 group-hover/dep:opacity-100 hover:text-red-500 cursor-pointer p-0.5 rounded-full hover:bg-red-50 dark:hover:bg-red-900/20"
-                                                                        >×</span>
-                                                                    </span>
-                                                                );
-                                                            })
-                                                        )}
-                                                    </div>
-                                                    <svg className="w-3 h-3 text-zinc-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                                                </button>
-                                                {openDeptDropdown === step.id && (
-                                                    <>
-                                                        <div className="fixed inset-0 z-40" onClick={() => setOpenDeptDropdown(null)} />
-                                                        <div className="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl z-50 max-h-[350px] overflow-y-auto w-[350px]">
-                                                            <div className="p-2 sticky top-0 bg-white dark:bg-zinc-800 border-b border-zinc-100 dark:border-zinc-700 z-10 flex justify-between items-center">
-                                                                <div className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">選擇跨部門依賴</div>
-                                                                <button onClick={() => setOpenDeptDropdown(null)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
-                                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                                                                </button>
-                                                            </div>
-                                                            <div className="p-1">
-                                                                {depts.map(deptName => {
-                                                                    const deptOptions = options.filter(o => o.dept === deptName && o.value !== step.id);
-                                                                    if (deptOptions.length === 0) return null;
-                                                                    return (
-                                                                        <div key={deptName} className="mb-2 last:mb-0">
-                                                                            <div className="px-2 py-1 flex items-center gap-2 sticky top-[33px] bg-white/95 dark:bg-zinc-800/95 backdrop-blur-sm z-10 border-b border-zinc-100/50 dark:border-zinc-700/50">
-                                                                                <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-700 px-1.5 py-0.5 rounded">{deptName}</span>
-                                                                            </div>
-                                                                            <div className="mt-1">
-                                                                                {deptOptions.map(opt => (
-                                                                                    <label key={opt.value} className="flex items-start px-2 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-700/50 rounded cursor-pointer gap-2 transition-colors ml-1">
-                                                                                        <input
-                                                                                            type="checkbox"
-                                                                                            checked={step.depends_on.includes(opt.value)}
-                                                                                            onChange={() => toggleDeptDependency(code, index, opt.value)}
-                                                                                            className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 border-zinc-300 dark:border-zinc-600 shrink-0"
-                                                                                        />
-                                                                                        <div className="flex flex-col min-w-0 flex-1 leading-tight mt-[1px]">
-                                                                                            <span className="text-sm text-zinc-700 dark:text-zinc-200 leading-snug">{opt.label}</span>
-                                                                                        </div>
-                                                                                    </label>
-                                                                                ))}
-                                                                            </div>
-                                                                        </div>
-                                                                    );
-                                                                })}
-                                                            </div>
-                                                        </div>
-                                                    </>
+                                                {showId && (
+                                                    <td className="p-3 align-middle text-zinc-600 dark:text-zinc-400 font-mono text-xs">
+                                                        {step.id}
+                                                    </td>
                                                 )}
-                                            </td>
-                                            <td className="p-3 align-middle">
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <span className="text-zinc-600 dark:text-zinc-400 text-xs">
-                                                        {step.kw_tiers && step.kw_tiers.length > 0
-                                                            ? step.kw_tiers.map(t => `${t.maxKW === 999999 ? '>500' : '<=' + t.maxKW}:${t.days}天`).join(', ')
-                                                            : '未設定'}
-                                                    </span>
+                                                <td className="p-3 align-middle relative">
                                                     <button
-                                                        onClick={() => setExpandedTierStepId(expandedTierStepId === step.id ? null : step.id)}
-                                                        className="text-xs text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap px-2 py-1 bg-blue-50 hover:bg-blue-100 rounded dark:bg-blue-900/20 dark:text-blue-400 dark:hover:text-blue-300"
+                                                        onClick={() => setOpenDeptDropdown(openDeptDropdown === step.id ? null : step.id)}
+                                                        className="w-full text-left bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 px-2 py-1.5 rounded text-sm min-h-[34px] flex flex-wrap gap-1 items-center justify-between hover:border-blue-400 transition-colors"
                                                     >
-                                                        {expandedTierStepId === step.id ? '隱藏' : '編輯規則'}
-                                                    </button>
-                                                </div>
-                                            </td>
-                                            <td className="p-3 align-middle">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => updateDeptNode(code, index, 'is_core', !step.is_core)}
-                                                    className={`w-full py-1 text-xs font-medium rounded transition-colors border ${step.is_core
-                                                        ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 dark:border-blue-800"
-                                                        : "bg-zinc-50 text-zinc-600 border-zinc-200 hover:bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:border-zinc-700"
-                                                        }`}
-                                                >
-                                                    {step.is_core ? "主流程" : "可選"}
-                                                </button>
-                                            </td>
-                                            <td className="p-3 align-middle">
-                                                <button
-                                                    onClick={() => deleteDeptNode(code, index)}
-                                                    className="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
-                                                >
-                                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                                </button>
-                                            </td>
-                                        </tr>
-                                        {expandedTierStepId === step.id && (
-                                            <tr className="bg-zinc-50/50 dark:bg-zinc-800/20 border-t-0">
-                                                <td colSpan={showId ? 6 : 5} className="p-4 border-b border-zinc-200 dark:border-zinc-800">
-                                                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/50 rounded-md p-4 space-y-4 shadow-sm">
-                                                        <div className="flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center border-b border-zinc-100 dark:border-zinc-800 pb-3">
-                                                            <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
-                                                                <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                                                                Kwp 級距工期規則 (按上限 Kwp 升冪)
-                                                            </h4>
-                                                        </div>
-
-                                                        <div className="flex flex-wrap gap-3 px-1">
-                                                            {(!step.kw_tiers || step.kw_tiers.length === 0) ? (
-                                                                <div className="text-sm text-zinc-400 italic py-2">
-                                                                    尚無設定級距，<button onClick={() => applyDefaultTiers(code, index, step.base_offset_days || 0)} className="text-blue-500 hover:underline">點擊套用預設</button>。
-                                                                </div>
+                                                        <div className="flex flex-wrap gap-1 flex-1">
+                                                            {step.depends_on.length === 0 ? (
+                                                                <span className="text-zinc-400 italic text-xs">無前置</span>
                                                             ) : (
-                                                                step.kw_tiers.map((tier, tIdx) => (
-                                                                    <div key={tIdx} className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/80 rounded-full px-3 py-1.5 border border-zinc-200 dark:border-zinc-700 shadow-sm group/tier hover:border-blue-300 transition-colors">
-                                                                        <div className="flex items-center gap-1">
-                                                                            <span className="text-zinc-500 dark:text-zinc-400 font-mono text-xs">
-                                                                                {tier.maxKW === 999999 ? '>500' : `<=${tier.maxKW}`} Kwp :
-                                                                            </span>
-                                                                        </div>
-                                                                        <div className="flex items-center gap-1">
-                                                                            <input
-                                                                                type="number"
-                                                                                value={tier.days}
-                                                                                onChange={(e) => updateTier(code, index, tIdx, 'days', parseInt(e.target.value) || 0)}
-                                                                                className="w-12 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 text-xs font-semibold text-center focus:ring-1 focus:ring-blue-500 text-blue-700 dark:text-blue-400"
-                                                                            />
-                                                                            <span className="text-zinc-500 text-xs pl-0.5">天</span>
-                                                                        </div>
-                                                                        <button
-                                                                            onClick={() => removeTier(code, index, tIdx)}
-                                                                            className="p-1 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors ml-1"
-                                                                            title="刪除"
-                                                                        >
-                                                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                                                                        </button>
-                                                                    </div>
-                                                                ))
+                                                                step.depends_on.map(depId => {
+                                                                    const opt = options.find(o => o.value === depId);
+                                                                    return (
+                                                                        <span key={depId} className="px-1.5 py-0.5 rounded text-xs bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 flex items-center gap-1 group/dep" title={opt ? opt.label : depId}>
+                                                                            {showId ? depId : (opt ? opt.originalStep.name.substring(0, 4) + '...' : depId)}
+                                                                            <span
+                                                                                onClick={(e) => { e.stopPropagation(); toggleDeptDependency(code, index, depId); }}
+                                                                                className="opacity-0 group-hover/dep:opacity-100 hover:text-red-500 cursor-pointer p-0.5 rounded-full hover:bg-red-50 dark:hover:bg-red-900/20"
+                                                                            >×</span>
+                                                                        </span>
+                                                                    );
+                                                                })
                                                             )}
-                                                            {/* Empty state or loop ended above */}
-                                                            {(!step.kw_tiers || step.kw_tiers.length === 0) && (
-                                                                <div className="text-sm text-zinc-400 italic py-2">
-                                                                    尚無設定級距，<button onClick={() => applyDefaultTiers(code, index, step.base_offset_days || 0)} className="text-blue-500 hover:underline">點擊套用預設</button>。
-                                                                </div>
-                                                            )}
-                                                            <button
-                                                                onClick={() => addTier(code, index)}
-                                                                className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 px-3 py-1.5 rounded-full border border-dashed border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
-                                                            >
-                                                                ＋ 新增級距
-                                                            </button>
                                                         </div>
-
-                                                        <div className="pt-3 mt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-zinc-100 dark:border-zinc-800">
-                                                            <div className="flex items-center gap-3 bg-zinc-50 dark:bg-zinc-800/30 px-3 py-2 rounded-md border border-zinc-200 dark:border-zinc-700/50">
-                                                                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">無符合級距時(備援):</span>
-                                                                <div className="flex items-center gap-2">
-                                                                    <input
-                                                                        type="number"
-                                                                        value={step.default_days ?? step.base_offset_days ?? 0}
-                                                                        onChange={(e) => updateDeptNode(code, index, 'default_days', parseInt(e.target.value) || 0)}
-                                                                        className="w-16 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 px-2 py-1 text-sm text-center focus:ring-1 focus:ring-blue-500 font-medium text-zinc-900 dark:text-zinc-100 focus:border-blue-500"
-                                                                    />
-                                                                    <span className="text-xs text-zinc-500">天</span>
+                                                        <svg className="w-3 h-3 text-zinc-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                                                    </button>
+                                                    {openDeptDropdown === step.id && (
+                                                        <>
+                                                            <div className="fixed inset-0 z-40" onClick={() => setOpenDeptDropdown(null)} />
+                                                            <div className="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl z-50 max-h-[350px] overflow-y-auto w-[350px]">
+                                                                <div className="p-2 sticky top-0 bg-white dark:bg-zinc-800 border-b border-zinc-100 dark:border-zinc-700 z-10 flex justify-between items-center">
+                                                                    <div className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">選擇跨部門依賴</div>
+                                                                    <button onClick={() => setOpenDeptDropdown(null)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
+                                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                                                    </button>
+                                                                </div>
+                                                                <div className="p-1">
+                                                                    {depts.map(deptName => {
+                                                                        const deptOptions = options.filter(o => o.dept === deptName && o.value !== step.id);
+                                                                        if (deptOptions.length === 0) return null;
+                                                                        return (
+                                                                            <div key={deptName} className="mb-2 last:mb-0">
+                                                                                <div className="px-2 py-1 flex items-center gap-2 sticky top-[33px] bg-white/95 dark:bg-zinc-800/95 backdrop-blur-sm z-10 border-b border-zinc-100/50 dark:border-zinc-700/50">
+                                                                                    <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-700 px-1.5 py-0.5 rounded">{deptName}</span>
+                                                                                </div>
+                                                                                <div className="mt-1">
+                                                                                    {deptOptions.map(opt => (
+                                                                                        <label key={opt.value} className="flex items-start px-2 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-700/50 rounded cursor-pointer gap-2 transition-colors ml-1">
+                                                                                            <input
+                                                                                                type="checkbox"
+                                                                                                checked={step.depends_on.includes(opt.value)}
+                                                                                                onChange={() => toggleDeptDependency(code, index, opt.value)}
+                                                                                                className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 border-zinc-300 dark:border-zinc-600 shrink-0"
+                                                                                            />
+                                                                                            <div className="flex flex-col min-w-0 flex-1 leading-tight mt-[1px]">
+                                                                                                <span className="text-sm text-zinc-700 dark:text-zinc-200 leading-snug">{opt.label}</span>
+                                                                                            </div>
+                                                                                        </label>
+                                                                                    ))}
+                                                                                </div>
+                                                                            </div>
+                                                                        );
+                                                                    })}
                                                                 </div>
                                                             </div>
-                                                            <p className="text-xs text-zinc-400 dark:text-zinc-500 italic">提示：上限輸入 999999 代表剩餘極大值。</p>
-                                                        </div>
+                                                        </>
+                                                    )}
+                                                </td>
+                                                <td className="p-3 align-middle">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="text-zinc-600 dark:text-zinc-400 text-xs text-wrap break-all line-clamp-2">
+                                                            {step.kw_tiers && step.kw_tiers.length > 0
+                                                                ? step.kw_tiers.map(t => `${t.maxKW === 999999 ? '>500' : '<=' + t.maxKW}:${t.days}天`).join(', ')
+                                                                : '未設定'}
+                                                        </span>
+                                                        <button
+                                                            onClick={() => setExpandedTierStepId(expandedTierStepId === step.id ? null : step.id)}
+                                                            className="text-xs text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap px-2 py-1 bg-blue-50 hover:bg-blue-100 rounded dark:bg-blue-900/20 dark:text-blue-400 dark:hover:text-blue-300"
+                                                        >
+                                                            {expandedTierStepId === step.id ? '隱藏' : '編輯規則'}
+                                                        </button>
                                                     </div>
+                                                </td>
+                                                <td className="p-3 align-middle">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => updateDeptNode(code, index, 'is_core', !step.is_core)}
+                                                        className={`w-full py-1 text-xs font-medium rounded transition-colors border ${step.is_core
+                                                            ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 dark:border-blue-800"
+                                                            : "bg-zinc-50 text-zinc-600 border-zinc-200 hover:bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:border-zinc-700"
+                                                            }`}
+                                                    >
+                                                        {step.is_core ? "主流程" : "可選"}
+                                                    </button>
+                                                </td>
+                                                <td className="p-3 align-middle text-center">
+                                                    <button
+                                                        onDoubleClick={() => {
+                                                            deleteDeptNode(code, index);
+                                                        }}
+                                                        className="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
+                                                        title="雙擊刪除節點"
+                                                    >
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                                    </button>
                                                 </td>
                                             </tr>
-                                        )}
-                                    </Fragment>
-                                ))}
+                                            {expandedTierStepId === step.id && (
+                                                <tr className="bg-zinc-50/50 dark:bg-zinc-800/20 border-t-0">
+                                                    <td colSpan={showId ? 6 : 5} className="p-4 border-b border-zinc-200 dark:border-zinc-800">
+                                                        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/50 rounded-md p-4 space-y-4 shadow-sm">
+                                                            <div className="flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center border-b border-zinc-100 dark:border-zinc-800 pb-3">
+                                                                <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
+                                                                    <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                                                    Kwp 級距工期規則 (按上限 Kwp 升冪)
+                                                                </h4>
+                                                            </div>
+
+                                                            <div className="flex flex-wrap gap-3 px-1">
+                                                                {(!step.kw_tiers || step.kw_tiers.length === 0) ? (
+                                                                    <div className="text-sm text-zinc-400 italic py-2">
+                                                                        尚無設定級距，<button onClick={() => applyDefaultTiers(code, index, step.base_offset_days || 0)} className="text-blue-500 hover:underline">點擊套用預設</button>。
+                                                                    </div>
+                                                                ) : (
+                                                                    step.kw_tiers.map((tier, tIdx) => (
+                                                                        <div key={tIdx} className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/80 rounded-full px-3 py-1.5 border border-zinc-200 dark:border-zinc-700 shadow-sm group/tier hover:border-blue-300 transition-colors">
+                                                                            <div className="flex items-center gap-1">
+                                                                                <span className="text-zinc-500 dark:text-zinc-400 font-mono text-xs">
+                                                                                    {tier.maxKW === 999999 ? '>500' : `<=${tier.maxKW}`} Kwp :
+                                                                                </span>
+                                                                            </div>
+                                                                            <div className="flex items-center gap-1">
+                                                                                <input
+                                                                                    type="number"
+                                                                                    min="0"
+                                                                                    value={tier.days}
+                                                                                    onChange={(e) => {
+                                                                                        const val = parseInt(e.target.value) || 0;
+                                                                                        updateTier(code, index, tIdx, 'days', Math.max(0, val));
+                                                                                    }}
+                                                                                    className="w-12 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 text-xs font-semibold text-center focus:ring-1 focus:ring-blue-500 text-blue-700 dark:text-blue-400"
+                                                                                />
+                                                                                <span className="text-zinc-500 text-xs pl-0.5">天</span>
+                                                                            </div>
+                                                                            <button
+                                                                                onClick={() => removeTier(code, index, tIdx)}
+                                                                                className="p-1 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors ml-1"
+                                                                                title="刪除"
+                                                                            >
+                                                                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                                                            </button>
+                                                                        </div>
+                                                                    ))
+                                                                )}
+                                                                <button
+                                                                    onClick={() => addTier(code, index)}
+                                                                    className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 px-3 py-1.5 rounded-full border border-dashed border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                                                                >
+                                                                    ＋ 新增級距
+                                                                </button>
+                                                            </div>
+
+                                                            <div className="pt-3 mt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-zinc-100 dark:border-zinc-800">
+                                                                <div className="flex items-center gap-3 bg-zinc-50 dark:bg-zinc-800/30 px-3 py-2 rounded-md border border-zinc-200 dark:border-zinc-700/50">
+                                                                    <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">無符合級距時(備援):</span>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <input
+                                                                            type="number"
+                                                                            min="0"
+                                                                            value={step.default_days ?? step.base_offset_days ?? 0}
+                                                                            onChange={(e) => {
+                                                                                const val = parseInt(e.target.value) || 0;
+                                                                                updateDeptNode(code, index, 'default_days', Math.max(0, val));
+                                                                            }}
+                                                                            className="w-16 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 px-2 py-1 text-sm text-center focus:ring-1 focus:ring-blue-500 font-medium text-zinc-900 dark:text-zinc-100 focus:border-blue-500"
+                                                                        />
+                                                                        <span className="text-xs text-zinc-500">天</span>
+                                                                    </div>
+                                                                </div>
+                                                                <p className="text-xs text-zinc-400 dark:text-zinc-500 italic">提示：上限輸入 999999 代表剩餘極大值。</p>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </Fragment>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -615,19 +708,38 @@ export default function FlowTemplatePage() {
                 <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
                     流程設定
                 </h1>
-                {activeTab !== "流程模板" && (
-                    <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={showId}
-                                onChange={(e) => setShowId(e.target.checked)}
-                                className="rounded border-zinc-300 dark:border-zinc-700 text-blue-600 focus:ring-blue-600"
-                            />
-                            顯示節點 ID
-                        </label>
-                    </div>
-                )}
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={handleSync}
+                        disabled={isSyncing}
+                        className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all ${isSyncing ? "bg-zinc-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-500 active:scale-95"}`}
+                    >
+                        {isSyncing ? (
+                            <>
+                                <svg className="animate-spin -ml-1 mr-3 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                同步中...
+                            </>
+                        ) : (
+                            <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
+                                儲存變更
+                            </>
+                        )}
+                    </button>
+                    {activeTab !== "流程模板" && (
+                        <div className="flex items-center gap-3 ml-2 border-l border-zinc-200 dark:border-zinc-700 pl-4">
+                            <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={showId}
+                                    onChange={(e) => setShowId(e.target.checked)}
+                                    className="rounded border-zinc-300 dark:border-zinc-700 text-blue-600 focus:ring-blue-600"
+                                />
+                                顯示節點 ID
+                            </label>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* Bookmark Tabs */}

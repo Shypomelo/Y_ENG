@@ -81,6 +81,33 @@ export type Database = {
                 }
                 Relationships: []
             }
+            google_calendar_settings: {
+                Row: {
+                    id: string
+                    calendar_id: string | null
+                    calendar_name: string | null
+                    sync_enabled: boolean
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    calendar_id?: string | null
+                    calendar_name?: string | null
+                    sync_enabled?: boolean
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    calendar_id?: string | null
+                    calendar_name?: string | null
+                    sync_enabled?: boolean
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: []
+            }
             flow_template_steps: {
                 Row: {
                     id: string
@@ -143,7 +170,10 @@ export type Database = {
             projects: {
                 Row: {
                     id: string
+                    case_no: string | null
                     name: string
+                    address: string | null
+                    sale_type: string | null
                     kwp: number
                     engineer_id: string | null
                     project_manager_id: string | null
@@ -159,12 +189,17 @@ export type Database = {
                     is_important: boolean
                     is_closed: boolean
                     owners: Json | null
+                    site_contact_name: string | null
+                    site_contact_phone: string | null
                     created_at: string
                     updated_at: string
                 }
                 Insert: {
                     id?: string
+                    case_no?: string | null
                     name: string
+                    address?: string | null
+                    sale_type?: string | null
                     kwp: number
                     engineer_id?: string | null
                     project_manager_id?: string | null
@@ -180,12 +215,17 @@ export type Database = {
                     is_important?: boolean
                     is_closed?: boolean
                     owners?: Json | null
+                    site_contact_name?: string | null
+                    site_contact_phone?: string | null
                     created_at?: string
                     updated_at?: string
                 }
                 Update: {
                     id?: string
+                    case_no?: string | null
                     name?: string
+                    address?: string | null
+                    sale_type?: string | null
                     kwp?: number
                     engineer_id?: string | null
                     project_manager_id?: string | null
@@ -201,6 +241,8 @@ export type Database = {
                     is_important?: boolean
                     is_closed?: boolean
                     owners?: Json | null
+                    site_contact_name?: string | null
+                    site_contact_phone?: string | null
                     created_at?: string
                     updated_at?: string
                 }
@@ -268,10 +310,14 @@ export type Database = {
             daily_schedules: {
                 Row: {
                     id: string
+                    title: string
                     case_name: string
                     schedule_date: string | null
                     start_time: string | null
                     end_time: string | null
+                    start_datetime: string | null
+                    end_datetime: string | null
+                    is_all_day: boolean | null
                     assignee_ids: string[] | null
                     engineer_id: string | null
                     project_id: string | null
@@ -279,15 +325,24 @@ export type Database = {
                     address: string | null
                     description: string | null
                     status: string | null
+                    source: string | null
+                    google_event_id: string | null
+                    google_calendar_id: string | null
+                    sync_status: string | null
+                    last_synced_at: string | null
                     created_at: string
                     updated_at: string
                 }
                 Insert: {
                     id?: string
+                    title?: string
                     case_name: string
                     schedule_date?: string | null
                     start_time?: string | null
                     end_time?: string | null
+                    start_datetime?: string | null
+                    end_datetime?: string | null
+                    is_all_day?: boolean | null
                     assignee_ids?: string[] | null
                     engineer_id?: string | null
                     project_id?: string | null
@@ -295,15 +350,24 @@ export type Database = {
                     address?: string | null
                     description?: string | null
                     status?: string | null
+                    source?: string | null
+                    google_event_id?: string | null
+                    google_calendar_id?: string | null
+                    sync_status?: string | null
+                    last_synced_at?: string | null
                     created_at?: string
                     updated_at?: string
                 }
                 Update: {
                     id?: string
+                    title?: string
                     case_name?: string
                     schedule_date?: string | null
                     start_time?: string | null
                     end_time?: string | null
+                    start_datetime?: string | null
+                    end_datetime?: string | null
+                    is_all_day?: boolean | null
                     assignee_ids?: string[] | null
                     engineer_id?: string | null
                     project_id?: string | null
@@ -311,6 +375,11 @@ export type Database = {
                     address?: string | null
                     description?: string | null
                     status?: string | null
+                    source?: string | null
+                    google_event_id?: string | null
+                    google_calendar_id?: string | null
+                    sync_status?: string | null
+                    last_synced_at?: string | null
                     created_at?: string
                     updated_at?: string
                 }
@@ -376,6 +445,439 @@ export type Database = {
                 }
                 Relationships: []
             }
+            maintenance_tickets: {
+                Row: {
+                    id: string
+                    project_id: string | null
+                    case_no: string | null
+                    case_name: string
+                    region: string | null
+                    report_time: string | null
+                    issue_summary: string | null
+                    status: string | null
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    project_id?: string | null
+                    case_no?: string | null
+                    case_name: string
+                    region?: string | null
+                    report_time?: string | null
+                    issue_summary?: string | null
+                    status?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    project_id?: string | null
+                    case_no?: string | null
+                    case_name?: string
+                    region?: string | null
+                    report_time?: string | null
+                    issue_summary?: string | null
+                    status?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: [
+                    {
+                        foreignKeyName: "maintenance_tickets_project_id_fkey"
+                        columns: ["project_id"]
+                        isOneToOne: false
+                        referencedRelation: "projects"
+                        referencedColumns: ["id"]
+                    }
+                ]
+            }
+            maintenance_reports: {
+                Row: {
+                    id: string
+                    ticket_id: string | null
+                    case_no: string | null
+                    case_name: string
+                    address: string | null
+                    site_contact_name: string | null
+                    site_contact_phone: string | null
+                    repair_item: string | null
+                    repair_notes: string | null
+                    repair_staff: string | null
+                    completed_at: string | null
+                    status: string | null
+                    workflow_state: string | null
+                    returned_reason: string | null
+                    reconciled_at: string | null
+                    metadata: Json | null
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    ticket_id?: string | null
+                    case_no?: string | null
+                    case_name: string
+                    address?: string | null
+                    site_contact_name?: string | null
+                    site_contact_phone?: string | null
+                    repair_item?: string | null
+                    repair_notes?: string | null
+                    repair_staff?: string | null
+                    completed_at?: string | null
+                    status?: string | null
+                    workflow_state?: string | null
+                    returned_reason?: string | null
+                    reconciled_at?: string | null
+                    metadata?: Json | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    ticket_id?: string | null
+                    case_no?: string | null
+                    case_name?: string
+                    address?: string | null
+                    site_contact_name?: string | null
+                    site_contact_phone?: string | null
+                    repair_item?: string | null
+                    repair_notes?: string | null
+                    repair_staff?: string | null
+                    completed_at?: string | null
+                    status?: string | null
+                    workflow_state?: string | null
+                    returned_reason?: string | null
+                    reconciled_at?: string | null
+                    metadata?: Json | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: [
+                    {
+                        foreignKeyName: "maintenance_reports_ticket_id_fkey"
+                        columns: ["ticket_id"]
+                        isOneToOne: false
+                        referencedRelation: "maintenance_tickets"
+                        referencedColumns: ["id"]
+                    }
+                ]
+            }
+            maintenance_reconciliation: {
+                Row: {
+                    id: string
+                    report_id: string | null
+                    case_name: string | null
+                    case_no: string | null
+                    report_date: string | null
+                    engineer_names: string | null
+                    treatment_index: number | null
+                    part_index: number | null
+                    item_id: string | null
+                    item_name_snapshot: string | null
+                    source_bucket: string
+                    qty: number
+                    remark: string | null
+                    status: string
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    report_id?: string | null
+                    case_name?: string | null
+                    case_no?: string | null
+                    report_date?: string | null
+                    engineer_names?: string | null
+                    treatment_index?: number | null
+                    part_index?: number | null
+                    item_id?: string | null
+                    item_name_snapshot?: string | null
+                    source_bucket: string
+                    qty?: number
+                    remark?: string | null
+                    status?: string
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    report_id?: string | null
+                    case_name?: string | null
+                    case_no?: string | null
+                    report_date?: string | null
+                    engineer_names?: string | null
+                    treatment_index?: number | null
+                    part_index?: number | null
+                    item_id?: string | null
+                    item_name_snapshot?: string | null
+                    source_bucket?: string
+                    qty?: number
+                    remark?: string | null
+                    status?: string
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: [
+                    {
+                        foreignKeyName: "maintenance_reconciliation_report_id_fkey"
+                        columns: ["report_id"]
+                        isOneToOne: false
+                        referencedRelation: "maintenance_reports"
+                        referencedColumns: ["id"]
+                    }
+                ]
+            }
+            inventory_items: {
+                Row: {
+                    id: string
+                    name: string
+                    category: string
+                    bucket: string
+                    is_active: boolean | null
+                    is_deleted: boolean | null
+                    sort_order: number | null
+                    remarks: string | null
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    name: string
+                    category: string
+                    bucket?: string
+                    is_active?: boolean | null
+                    is_deleted?: boolean | null
+                    sort_order?: number | null
+                    remarks?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    name?: string
+                    category?: string
+                    bucket?: string
+                    is_active?: boolean | null
+                    is_deleted?: boolean | null
+                    sort_order?: number | null
+                    remarks?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: []
+            }
+            inventory_usage_logs: {
+                Row: {
+                    id: string
+                    date: string
+                    case_name: string | null
+                    item_id: string | null
+                    qty: number
+                    bucket: string
+                    source_bucket: string | null
+                    status: string
+                    report_id: string | null
+                    reconciliation_id: string | null
+                    treatment_name: string | null
+                    treatment_index: number | null
+                    part_index: number | null
+                    item_name_snapshot: string | null
+                    remarks: string | null
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    date?: string
+                    case_name?: string | null
+                    item_id?: string | null
+                    qty: number
+                    bucket?: string
+                    source_bucket?: string | null
+                    status?: string
+                    report_id?: string | null
+                    reconciliation_id?: string | null
+                    treatment_name?: string | null
+                    treatment_index?: number | null
+                    part_index?: number | null
+                    item_name_snapshot?: string | null
+                    remarks?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    date?: string
+                    case_name?: string | null
+                    item_id?: string | null
+                    qty?: number
+                    bucket?: string
+                    source_bucket?: string | null
+                    status?: string
+                    report_id?: string | null
+                    reconciliation_id?: string | null
+                    treatment_name?: string | null
+                    treatment_index?: number | null
+                    part_index?: number | null
+                    item_name_snapshot?: string | null
+                    remarks?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: [
+                    {
+                        foreignKeyName: "inventory_usage_logs_item_id_fkey"
+                        columns: ["item_id"]
+                        isOneToOne: false
+                        referencedRelation: "inventory_items"
+                        referencedColumns: ["id"]
+                    },
+                    {
+                        foreignKeyName: "inventory_usage_logs_report_id_fkey"
+                        columns: ["report_id"]
+                        isOneToOne: false
+                        referencedRelation: "maintenance_reports"
+                        referencedColumns: ["id"]
+                    }
+                ]
+            }
+            inventory_inbound_logs: {
+                Row: {
+                    id: string
+                    item_id: string | null
+                    date: string
+                    qty: number
+                    remarks: string | null
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    item_id?: string | null
+                    date?: string
+                    qty: number
+                    remarks?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    item_id?: string | null
+                    date?: string
+                    qty?: number
+                    remarks?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: [
+                    {
+                        foreignKeyName: "inventory_inbound_logs_item_id_fkey"
+                        columns: ["item_id"]
+                        isOneToOne: false
+                        referencedRelation: "inventory_items"
+                        referencedColumns: ["id"]
+                    }
+                ]
+            }
+            inventory_master: {
+                Row: {
+                    id: string
+                    category: string
+                    item_model: string
+                    item_name: string | null
+                    initial_stock: number
+                    source_sheet: string | null
+                    synced_at: string
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    category: string
+                    item_model: string
+                    item_name?: string | null
+                    initial_stock?: number
+                    source_sheet?: string | null
+                    synced_at?: string
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    category?: string
+                    item_model?: string
+                    item_name?: string | null
+                    initial_stock?: number
+                    source_sheet?: string | null
+                    synced_at?: string
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: []
+            }
+            inventory_movements: {
+                Row: {
+                    id: string
+                    maintenance_report_id: string | null
+                    detail_row_index: number
+                    case_no: string | null
+                    case_name: string | null
+                    item_model: string
+                    quantity: number
+                    old_model: string | null
+                    old_serial: string | null
+                    new_serial: string | null
+                    movement_type: string
+                    movement_date: string | null
+                    note: string | null
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    maintenance_report_id?: string | null
+                    detail_row_index: number
+                    case_no?: string | null
+                    case_name?: string | null
+                    item_model: string
+                    quantity?: number
+                    old_model?: string | null
+                    old_serial?: string | null
+                    new_serial?: string | null
+                    movement_type: string
+                    movement_date?: string | null
+                    note?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    maintenance_report_id?: string | null
+                    detail_row_index?: number
+                    case_no?: string | null
+                    case_name?: string | null
+                    item_model?: string
+                    quantity?: number
+                    old_model?: string | null
+                    old_serial?: string | null
+                    new_serial?: string | null
+                    movement_type?: string
+                    movement_date?: string | null
+                    note?: string | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: [
+                    {
+                        foreignKeyName: "inventory_movements_maintenance_report_id_fkey"
+                        columns: ["maintenance_report_id"]
+                        isOneToOne: false
+                        referencedRelation: "maintenance_reports"
+                        referencedColumns: ["id"]
+                    }
+                ]
+            }
         }
         Views: {
             [key: string]: {
@@ -409,3 +911,11 @@ export type ProjectStep = Database['public']['Tables']['project_steps']['Row']
 export type DailySchedule = Database['public']['Tables']['daily_schedules']['Row']
 export type TodoItem = Database['public']['Tables']['todo_items']['Row']
 export type SystemSetting = Database['public']['Tables']['system_settings']['Row']
+export type MaintenanceTicket = Database['public']['Tables']['maintenance_tickets']['Row']
+export type MaintenanceReport = Database['public']['Tables']['maintenance_reports']['Row']
+export type MaintenanceReconciliation = Database['public']['Tables']['maintenance_reconciliation']['Row']
+export type InventoryItem = Database['public']['Tables']['inventory_items']['Row']
+export type InventoryUsageLog = Database['public']['Tables']['inventory_usage_logs']['Row']
+export type InventoryInboundLog = Database['public']['Tables']['inventory_inbound_logs']['Row']
+export type InventoryMaster = Database['public']['Tables']['inventory_master']['Row']
+export type InventoryMovement = Database['public']['Tables']['inventory_movements']['Row']

@@ -1,0 +1,4 @@
+node_modules/
+.playwright-profile/
+probe-output/
+*.log

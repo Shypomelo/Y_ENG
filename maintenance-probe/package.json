@@ -1,0 +1,19 @@
+{
+  "name": "maintenance-probe",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "probe": "tsx probe.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "csv-writer": "^1.6.0",
+    "playwright": "^1.58.2",
+    "tsx": "^4.21.0"
+  }
+}

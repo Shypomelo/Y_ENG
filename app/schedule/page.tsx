@@ -19,6 +19,7 @@ type ScheduleEvent = {
 import * as actions from "./actions";
 import { DailySchedule } from "../../lib/types/database";
 import WeeklyView from "./components/WeeklyView";
+import GoogleSyncSettingsModal from "./components/GoogleSyncSettingsModal";
 
 // --- Helper Functions ---
 const formatLocal = (date: Date) => {
@@ -67,6 +68,9 @@ export default function SchedulePage() {
     const [dbSchedules, setDbSchedules] = useState<DailySchedule[]>([]);
     const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
 
+    // Google Calendar Sync Settings
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
     const fetchAllSchedules = async () => {
         setIsLoadingSchedules(true);
         try {
@@ -76,11 +80,14 @@ export default function SchedulePage() {
             const end = new Date();
             end.setMonth(end.getMonth() + 6);
 
-            const data = await actions.getSchedulesAction(
-                formatLocal(start),
-                formatLocal(end)
-            );
-            setDbSchedules(data);
+            const [internalData, googleData] = await Promise.all([
+                actions.getSchedulesAction(formatLocal(start), formatLocal(end)),
+                actions.fetchGoogleOverlayAction(start.toISOString(), end.toISOString()).catch(e => {
+                    console.error("Failed to fetch Google overlay", e);
+                    return [];
+                })
+            ]);
+            setDbSchedules([...internalData, ...googleData]);
         } catch (error: any) {
             console.error("Failed to fetch schedules", error);
             alert(`讀取排程失敗：\n${error.message}`);
@@ -216,20 +223,39 @@ export default function SchedulePage() {
             </div>
 
             {/* Bookmark Tabs */}
-            <div className="flex overflow-x-auto border-b border-zinc-200 dark:border-zinc-800 mb-6 shrink-0 no-scrollbar">
-                {(["今天跑哪", "專案月曆"] as const).map(tab => (
-                    <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        className={`whitespace-nowrap py-3 px-5 border-b-2 font-medium text-sm transition-colors ${activeTab === tab
-                            ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-900/10 rounded-t-lg"
-                            : "border-transparent text-zinc-500 hover:text-zinc-700 hover:border-zinc-300 dark:text-zinc-400 dark:hover:text-zinc-300 dark:hover:border-zinc-700"
-                            }`}
-                    >
-                        {tab}
-                    </button>
-                ))}
+            <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 mb-6 shrink-0">
+                <div className="flex overflow-x-auto no-scrollbar">
+                    {(["今天跑哪", "專案月曆"] as const).map(tab => (
+                        <button
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            className={`whitespace-nowrap py-3 px-5 border-b-2 font-medium text-sm transition-colors ${activeTab === tab
+                                ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-900/10 rounded-t-lg"
+                                : "border-transparent text-zinc-500 hover:text-zinc-700 hover:border-zinc-300 dark:text-zinc-400 dark:hover:text-zinc-300 dark:hover:border-zinc-700"
+                                }`}
+                        >
+                            {tab}
+                        </button>
+                    ))}
+                </div>
+
+                <button
+                    onClick={() => setIsSettingsOpen(true)}
+                    className="flex items-center gap-2 px-3 py-2 mb-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-800 rounded-xl hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all font-bold shadow-sm"
+                    title="Google 日曆同步設定"
+                >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    <span className="text-xs uppercase tracking-wider">Google 同步設定</span>
+                </button>
             </div>
+
+            <GoogleSyncSettingsModal
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                onManualSync={() => {
+                    fetchAllSchedules();
+                }}
+            />
 
             {activeTab === "今天跑哪" ? (
                 <div className="flex-1 min-h-0 overflow-hidden">

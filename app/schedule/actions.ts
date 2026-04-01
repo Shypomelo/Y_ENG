@@ -6,27 +6,140 @@ import * as scheduleRepo from "../../lib/repositories/schedules";
 import * as todoRepo from "../../lib/repositories/todos";
 import * as settingsRepo from "../../lib/repositories/settings";
 import { DailySchedule, TodoItem } from "../../lib/types/database";
+import {
+    syncEventToGoogle,
+    deleteEventFromGoogle,
+    fetchExternalEvents,
+    hasGoogleCredentials,
+    testGoogleConnection
+} from "../../lib/google-calendar";
 
 // Schedule Actions
 export async function getSchedulesAction(startDate: string, endDate: string) {
-    return await scheduleRepo.listSchedules(startDate, endDate);
+    try {
+        return await scheduleRepo.listSchedules(startDate, endDate);
+    } catch (error: any) {
+        console.error("getSchedulesAction Error:", error.message || error);
+        throw new Error("讀取排程失敗，請檢查系統環境變數配置。");
+    }
 }
 
 export async function createScheduleAction(schedule: Omit<DailySchedule, 'id' | 'created_at' | 'updated_at'>) {
     if (!schedule.schedule_date || schedule.schedule_date === "") {
         schedule.schedule_date = '1970-01-01';
     }
-    const res = await scheduleRepo.createSchedule(schedule);
+
+    // 1. Create in Database
+    const res = await scheduleRepo.createSchedule(schedule) as any;
+
+    // 2. Sync to Google Calendar if configured
+    if (res && res.id && hasGoogleCredentials() && schedule.source !== 'google_readonly') {
+        const startTimeStr = schedule.start_time || '00:00:00';
+        const endTimeStr = schedule.end_time || '23:59:59';
+
+        const payload = {
+            title: schedule.title || schedule.case_name || '未命名排程',
+            description: schedule.description || '',
+            location: schedule.address || '',
+            start_datetime: schedule.start_datetime || `${schedule.schedule_date}T${startTimeStr.substring(0, 5)}:00+08:00`,
+            end_datetime: schedule.end_datetime || `${schedule.schedule_date}T${endTimeStr.substring(0, 5)}:00+08:00`,
+            is_all_day: schedule.is_all_day || false
+        };
+        const syncRes = await syncEventToGoogle(res.id, payload);
+        console.log(`[ScheduleActions] Create sync for ID ${res.id} result:`, syncRes.success ? "✅ Success" : "❌ Failed", syncRes.googleEventId || "");
+        
+        if (syncRes.success && syncRes.googleEventId) {
+            await scheduleRepo.updateSchedule(res.id, {
+                google_event_id: syncRes.googleEventId,
+                google_calendar_id: syncRes.calendarId,
+                sync_status: 'synced',
+                last_synced_at: new Date().toISOString()
+            });
+            res.google_event_id = syncRes.googleEventId;
+            res.sync_status = 'synced';
+            res.last_synced_at = new Date().toISOString();
+        } else if (!syncRes.success) {
+            console.error(`[ScheduleActions] Create sync failed for ${res.id}:`, (syncRes as any).error);
+            await scheduleRepo.updateSchedule(res.id, { 
+                sync_status: 'failed',
+                last_synced_at: new Date().toISOString() 
+            });
+            res.sync_status = 'failed';
+        }
+        res.googleSync = { success: syncRes.success, error: (syncRes as any).error };
+    }
+
     revalidatePath('/schedule');
     return res;
 }
 
 export async function updateScheduleAction(id: string, updates: Partial<DailySchedule>) {
     try {
-        if (!updates.schedule_date || updates.schedule_date === "") {
+        const isVirtualGoogle = id.startsWith('google-');
+        const googleEventId = isVirtualGoogle ? id.replace('google-', '') : null;
+
+        if (updates.schedule_date === "") {
             updates.schedule_date = '1970-01-01';
         }
-        const res = await scheduleRepo.updateSchedule(id, updates);
+
+        // Get existing to find internal mapping or the record itself
+        const existing = await scheduleRepo.listSchedules('1970-01-01', '2100-01-01');
+        
+        let targetId = id;
+        let currentMapping = existing.find(s => s.id === id);
+
+        // If it's a virtual ID, we try to find its corresponding internal record
+        if (isVirtualGoogle && googleEventId) {
+            currentMapping = existing.find(s => s.google_event_id === googleEventId);
+            if (currentMapping) {
+                targetId = currentMapping.id;
+            } else {
+                // Not in DB yet? This is an ADOPTION.
+                // We create a new record instead of updating a non-existent UUID.
+                const newSchedule = {
+                    ...updates,
+                    google_event_id: googleEventId,
+                    source: 'internal', // It's now internal
+                    sync_status: 'synced'
+                } as any;
+                const created = await createScheduleAction(newSchedule);
+                revalidatePath('/schedule');
+                return created;
+            }
+        }
+
+        const res = await scheduleRepo.updateSchedule(targetId, updates) as any;
+
+        // Sync to Google Calendar if configured
+        if (currentMapping && hasGoogleCredentials()) {
+            const startTimeStr = updates.start_time ?? currentMapping.start_time ?? '00:00:00';
+            const endTimeStr = updates.end_time ?? currentMapping.end_time ?? '23:59:59';
+            const dateStr = updates.schedule_date || currentMapping.schedule_date;
+
+            const payload = {
+                title: updates.case_name || currentMapping.case_name || '未命名排程',
+                description: updates.description ?? currentMapping.description ?? '',
+                location: updates.address ?? currentMapping.address ?? '',
+                start_datetime: `${dateStr}T${startTimeStr.substring(0, 5)}:00+08:00`,
+                end_datetime: `${dateStr}T${endTimeStr.substring(0, 5)}:00+08:00`,
+                is_all_day: updates.is_all_day ?? currentMapping.is_all_day ?? false
+            };
+            
+            const syncRes = await syncEventToGoogle(targetId, payload, currentMapping.google_event_id || undefined);
+            console.log(`[ScheduleActions] Update sync for ID ${targetId} result:`, syncRes.success ? "✅ Success" : "❌ Failed");
+            
+            if (syncRes.success && syncRes.googleEventId) {
+                await scheduleRepo.updateSchedule(targetId, {
+                    google_event_id: syncRes.googleEventId,
+                    sync_status: 'synced',
+                    last_synced_at: new Date().toISOString()
+                });
+                res.google_event_id = syncRes.googleEventId;
+                res.sync_status = 'synced';
+            }
+            res.googleSync = { success: syncRes.success, error: (syncRes as any).error };
+        }
+
         revalidatePath('/schedule');
         return res;
     } catch (error: any) {
@@ -37,16 +150,104 @@ export async function updateScheduleAction(id: string, updates: Partial<DailySch
 
 export async function deleteScheduleAction(id: string) {
     try {
-        await scheduleRepo.deleteSchedule(id);
+        const isVirtualGoogle = id.startsWith('google-');
+        const googleEventId = isVirtualGoogle ? id.replace('google-', '') : null;
+
+        // Get existing to find internal mapping or the record itself
+        const existing = await scheduleRepo.listSchedules('1970-01-01', '2100-01-01');
+        
+        let targetId = id;
+        let mapping = existing.find(s => s.id === id);
+
+        // If it's a virtual ID, we try to find its corresponding internal record
+        if (isVirtualGoogle && googleEventId) {
+            mapping = existing.find(s => s.google_event_id === googleEventId);
+            if (mapping) {
+                targetId = mapping.id;
+            }
+        }
+
+        // Only delete from DB if it's NOT a pure virtual overlay that hasn't been mapped yet
+        if (!isVirtualGoogle || mapping) {
+            await scheduleRepo.deleteSchedule(targetId);
+        }
+
+        let googleDeleted = true;
+        let deleteError = null;
+
+        // Determine which Google ID to delete
+        const finalGoogleId = googleEventId || mapping?.google_event_id;
+
+        if (finalGoogleId && hasGoogleCredentials()) {
+            const syncRes = await deleteEventFromGoogle(finalGoogleId);
+            console.log(`[ScheduleActions] Delete sync for Google ID ${finalGoogleId} result:`, syncRes.success ? "✅ Success" : "❌ Failed");
+            if (!syncRes.success) {
+                googleDeleted = false;
+                deleteError = syncRes.error;
+            }
+        }
+
         revalidatePath('/schedule');
+        return { success: true, googleSync: { success: googleDeleted, error: deleteError } };
     } catch (error: any) {
         console.error("deleteScheduleAction Error:", error.message || error);
         throw error;
     }
 }
 
+export async function fetchGoogleOverlayAction(timeMin: string, timeMax: string) {
+    if (!hasGoogleCredentials()) return [];
+    const res = await fetchExternalEvents(timeMin, timeMax);
+    if (!res.success) return [];
+
+    // Map Google Event format to matching DailySchedule UI overlay format
+    return res.items.map((item: any) => {
+        let dateStr = item.start?.date || item.start?.dateTime?.substring(0, 10);
+        let startTimeVal = item.start?.dateTime ? item.start.dateTime.substring(11, 16) : null;
+        let endTimeVal = item.end?.dateTime ? item.end.dateTime.substring(11, 16) : null;
+
+        return {
+            id: `google-${item.id}`,
+            case_name: item.summary || 'Google 行事曆事件',
+            title: item.summary || 'Google 行事曆事件',
+            description: item.description,
+            address: item.location,
+            schedule_date: dateStr,
+            start_time: startTimeVal,
+            end_time: endTimeVal,
+            start_datetime: item.start?.dateTime || item.start?.date,
+            end_datetime: item.end?.dateTime || item.end?.date,
+            is_all_day: !!item.start?.date,
+            source: 'google_readonly',
+            google_event_id: item.id,
+        } as unknown as DailySchedule;
+    });
+}
+
+export async function testGoogleSyncAction() {
+    // 1. Check basic Env Vars
+    if (!hasGoogleCredentials()) {
+        return { success: false, message: "尚未配置 Google API 環境變數 (CLIENT_EMAIL 或 PRIVATE_KEY)" };
+    }
+
+    // 2. Use GOOGLE_CALENDAR_ID from Env
+    const calendarId = process.env.GOOGLE_CALENDAR_ID || "";
+    if (!calendarId) {
+        return { success: false, message: "尚未配置 GOOGLE_CALENDAR_ID 環境變數" };
+    }
+
+    // 3. Test actual connection
+    const res = await testGoogleConnection(calendarId);
+    return res;
+}
+
 export async function listApplicationsAction() {
-    return await scheduleRepo.listApplications();
+    try {
+        return await scheduleRepo.listApplications();
+    } catch (error: any) {
+        console.error("listApplicationsAction Error:", error.message || error);
+        throw new Error("讀取任務申請失敗，請檢查系統環境變數配置。");
+    }
 }
 
 // Todo Actions
@@ -73,9 +274,18 @@ export async function deleteTodoAction(id: string) {
 
 // Settings Actions
 export async function getSettingAction<T>(id: string) {
-    const data = await settingsRepo.getSetting<T>(id);
-    if (!data && id === 'schedule_work_types') {
-        return ["掛表", "現勘", "進場", "停電", "建置", "電檢", "驗收", "維修", "清洗", "開會", "內勤", "其他", "休假"] as unknown as T;
+    try {
+        const data = await settingsRepo.getSetting<T>(id);
+        if (!data && id === 'schedule_work_types') {
+            return ["掛表", "現勘", "進場", "停電", "建置", "電檢", "驗收", "維修", "清洗", "開會", "內勤", "其他", "休假"] as unknown as T;
+        }
+        return data;
+    } catch (error: any) {
+        console.error("getSettingAction Error:", error.message || error);
+        // Fallback for critical settings
+        if (id === 'schedule_work_types') {
+            return ["掛表", "現勘", "進場", "停電", "建置", "電檢", "驗收", "維修", "清洗", "開會", "內勤", "其他", "休假"] as unknown as T;
+        }
+        return null;
     }
-    return data;
 }

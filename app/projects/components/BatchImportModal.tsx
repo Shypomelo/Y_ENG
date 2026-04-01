@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
-import { fetchLookupDataAction } from "../import-actions";
+import React, { useState, useCallback, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { fetchLookupDataAction, performImportAction, repairProjectsDataAction } from "../import-actions";
 
 // ---------------------
 // Types
@@ -19,7 +20,10 @@ interface ColumnMapping {
 
 interface ProjectPreviewRow {
     rowIndex: number;
+    case_no: string | null;
     name: string;
+    sale_type: string | null;
+    address: string | null;
     kwp: number | null;
     engineer: string | null;
     engineerId: string | null;
@@ -37,6 +41,7 @@ interface ProjectPreviewRow {
     electricalVendorId: string | null;
     statusFlag: string | null;
     projectedMeterDate: string | null;
+    importStatus: "new" | "update" | "address_change" | "duplicate" | "manual";
     warnings: string[];
 }
 
@@ -51,24 +56,30 @@ interface StepPreviewRow {
 interface LookupData {
     staff: { id: string; name: string; department: string }[];
     vendors: { id: string; name: string; category: string }[];
+    existingProjects: { id: string; name: string; case_no: string | null; address: string | null; owners: any }[];
     existingProjectNames: string[];
+    allStepNames: string[];
 }
 
 // ---------------------
 // Auto-mapping rules
 // ---------------------
 const PROJECT_FIELD_RULES: { patterns: RegExp[]; field: string; label: string }[] = [
-    { patterns: [/案場名稱/i, /案件名稱/i, /專案名稱/i, /project.?name/i, /^name$/i, /案名/i], field: "name", label: "案場名稱" },
+    { patterns: [/案號/i, /案件編號/i, /編號/i, /case.?no/i], field: "case_no", label: "案件編號" },
+    { patterns: [/案場名稱/i, /案件名稱/i, /專案名稱/i, /project.?name/i, /^name$/i, /案名/i], field: "name", label: "案件名稱" },
+    { patterns: [/躉售型態/i, /躉售/i, /sale.?type/i], field: "sale_type", label: "躉售型態" },
+    { patterns: [/地址/i, /地點/i, /address/i], field: "address", label: "地址" },
     { patterns: [/容量/i, /kwp/i, /kw/i, /瓩/i], field: "kwp", label: "容量 kWp" },
-    { patterns: [/工務/i, /工程/i, /engineer/i], field: "engineer_id", label: "工程人員" },
-    { patterns: [/pm/i, /專案經理/i, /project.?manager/i], field: "project_manager_id", label: "PM" },
+    { patterns: [/工程/i, /工務/i, /工程人員/i, /engineer/i], field: "engineer_id", label: "工程" },
+    { patterns: [/專案/i, /pm/i, /專案經理/i, /project.?manager/i], field: "project_manager_id", label: "專案" },
     { patterns: [/業務/i, /sales/i], field: "sales_id", label: "業務" },
-    { patterns: [/結構/i, /structure_id/i], field: "structure_id", label: "結構人員" },
-    { patterns: [/行政/i, /admin/i], field: "admin_id", label: "行政人員" },
-    { patterns: [/支架廠商/i, /結構廠商/i, /structure.?vendor/i], field: "structure_vendor_id", label: "支架廠商" },
-    { patterns: [/電力廠商/i, /electrical.?vendor/i, /電氣廠商/i], field: "electrical_vendor_id", label: "電力廠商" },
+    { patterns: [/結構/i, /structure_id/i], field: "structure_id", label: "結構" },
+    { patterns: [/行政/i, /admin/i], field: "admin_id", label: "行政" },
+    { patterns: [/支架廠商/i, /結構廠商/i, /structure.?vendor/i, /支架包商/i], field: "structure_vendor_id", label: "支架廠商" },
+    // 移除模糊的「電力」規則以避免誤對應人員
+    { patterns: [/電力廠商/i, /electrical.?vendor/i, /電氣廠商/i, /電力包商/i], field: "electrical_vendor_id", label: "電力廠商" },
     { patterns: [/狀態/i, /status/i], field: "status_flag", label: "專案狀態" },
-    { patterns: [/掛表日期/i, /掛表預計/i, /meter.?date/i, /projected.?meter/i], field: "projected_meter_date", label: "掛表日期" },
+    { patterns: [/掛表日期/i, /掛表預計/i, /meter.?date/i, /projected.?meter/i, /掛表 預計完成日/], field: "projected_meter_date", label: "掛表日期" },
 ];
 
 const STEP_DATE_PATTERNS = [
@@ -94,6 +105,8 @@ function detectStepColumn(colName: string): { stepName: string; dateType: "plann
     }
     return null;
 }
+
+// handleBatchRepair moved to page.tsx
 
 function autoMapColumn(colName: string, sampleValues: string[]): MappingTarget {
     // Check project fields first
@@ -157,26 +170,68 @@ function parseCSV(text: string): { headers: string[]; rows: string[][] } {
 // ---------------------
 // Lookup helpers
 // ---------------------
+function normalizeName(name: string | null | undefined): string {
+    if (!name) return "";
+    return name
+        .normalize("NFKC")
+        .replace(/\s+/g, "")
+        .toLowerCase();
+}
+
 function findStaffId(name: string | null, lookup: LookupData): { id: string | null; found: boolean } {
     if (!name || !name.trim()) return { id: null, found: true };
-    const match = lookup.staff.find(s => s.name === name.trim());
+    const n = normalizeName(name);
+    const match = lookup.staff.find(s => normalizeName(s.name) === n);
     return match ? { id: match.id, found: true } : { id: null, found: false };
 }
 
 function findVendorId(name: string | null, lookup: LookupData): { id: string | null; found: boolean } {
     if (!name || !name.trim()) return { id: null, found: true };
-    const match = lookup.vendors.find(v => v.name === name.trim());
+    const n = normalizeName(name);
+    const match = lookup.vendors.find(v => normalizeName(v.name) === n);
     return match ? { id: match.id, found: true } : { id: null, found: false };
+}
+
+// ---------------------
+// Date Helpers
+// ---------------------
+function cleanDateValue(val: string | null | undefined): string | null {
+    if (!val) return null;
+    const trimmed = val.trim();
+    if (trimmed === "" || trimmed === "-" || trimmed === "--") return null;
+
+    // Check if it's an Excel serial number (e.g. 45846)
+    if (/^\d{5}(\.\d+)?$/.test(trimmed)) {
+        const serial = parseFloat(trimmed);
+        // Excel 0 is 1899-12-30. 25569 is 1970-01-01.
+        const date = new Date((serial - 25569) * 86400 * 1000);
+        if (!isNaN(date.getTime())) {
+            return date.toISOString().split("T")[0];
+        }
+    }
+
+    // Try standard parsing
+    // Replace / with - for consistency
+    const normalized = trimmed.replace(/\//g, "-");
+    const date = new Date(normalized);
+    if (!isNaN(date.getTime())) {
+        return date.toISOString().split("T")[0];
+    }
+
+    return null;
 }
 
 // ---------------------
 // Available system fields for dropdown
 // ---------------------
 const SYSTEM_FIELDS: { value: string; label: string; table: string }[] = [
-    { value: "projects:name", label: "案場名稱", table: "projects" },
+    { value: "projects:case_no", label: "案件編號", table: "projects" },
+    { value: "projects:name", label: "案件名稱", table: "projects" },
+    { value: "projects:sale_type", label: "躉售型態", table: "projects" },
+    { value: "projects:address", label: "地址", table: "projects" },
     { value: "projects:kwp", label: "容量 kWp", table: "projects" },
-    { value: "projects:engineer_id", label: "工程人員", table: "projects" },
-    { value: "projects:project_manager_id", label: "PM", table: "projects" },
+    { value: "projects:engineer_id", label: "工程", table: "projects" },
+    { value: "projects:project_manager_id", label: "專案", table: "projects" },
     { value: "projects:sales_id", label: "業務", table: "projects" },
     { value: "projects:structure_id", label: "結構人員", table: "projects" },
     { value: "projects:admin_id", label: "行政人員", table: "projects" },
@@ -191,7 +246,8 @@ const SYSTEM_FIELDS: { value: string; label: string; table: string }[] = [
 // Component
 // =======================
 export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-    const [step, setStep] = useState<1 | 2 | 3>(1);
+    const router = useRouter();
+    const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
     const [headers, setHeaders] = useState<string[]>([]);
     const [rows, setRows] = useState<string[][]>([]);
     const [mappings, setMappings] = useState<ColumnMapping[]>([]);
@@ -203,6 +259,17 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
     const [projectPreviews, setProjectPreviews] = useState<ProjectPreviewRow[]>([]);
     const [stepPreviews, setStepPreviews] = useState<StepPreviewRow[]>([]);
     const [unmappedColumns, setUnmappedColumns] = useState<string[]>([]);
+
+    // Import states
+    const [isImporting, setIsImporting] = useState(false);
+    const [importResults, setImportResults] = useState<{
+        projectsCreated: number;
+        stepsCreated: number;
+        errors: string[];
+    } | null>(null);
+
+    const [isRepairing, setIsRepairing] = useState(false);
+    const [repairResults, setRepairResults] = useState<any>(null);
 
     // Reset on close
     useEffect(() => {
@@ -216,6 +283,8 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
             setProjectPreviews([]);
             setStepPreviews([]);
             setUnmappedColumns([]);
+            setIsImporting(false);
+            setImportResults(null);
         }
     }, [isOpen]);
 
@@ -242,6 +311,7 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                 };
             });
             setMappings(autoMapped);
+            // NEW: If we auto-detected everything, skip to step 2 automatically or just stay
         };
         reader.readAsText(file, "UTF-8");
     }, []);
@@ -256,10 +326,13 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
             // Build project previews
             const nameColIdx = mappings.findIndex(m => m.target.table === "projects" && (m.target as any).field === "name");
 
-            const previews: ProjectPreviewRow[] = rows.map((row, ri) => {
+            const previews: ProjectPreviewRow[] = rows.map((row: string[], ri: number) => {
                 const pw: ProjectPreviewRow = {
                     rowIndex: ri + 2,
+                    case_no: null,
                     name: "",
+                    sale_type: null,
+                    address: null,
                     kwp: null,
                     engineer: null, engineerId: null,
                     pm: null, pmId: null,
@@ -270,6 +343,7 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                     electricalVendor: null, electricalVendorId: null,
                     statusFlag: null,
                     projectedMeterDate: null,
+                    importStatus: "new",
                     warnings: [],
                 };
 
@@ -278,66 +352,91 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                     const val = row[ci] || "";
                     const field = (m.target as any).field;
                     switch (field) {
+                        case "case_no": pw.case_no = val; break;
                         case "name": pw.name = val; break;
+                        case "sale_type": pw.sale_type = val; break;
+                        case "address": pw.address = val; break;
                         case "kwp": pw.kwp = parseFloat(val) || null; break;
                         case "engineer_id": {
                             pw.engineer = val;
                             const r = findStaffId(val, data);
                             pw.engineerId = r.id;
-                            if (!r.found && val) pw.warnings.push(`工程「${val}」在人員表找不到`);
+                            if (!r.found && val) pw.warnings.push(`工程「${val}」不詳`);
                             break;
                         }
                         case "project_manager_id": {
                             pw.pm = val;
                             const r = findStaffId(val, data);
                             pw.pmId = r.id;
-                            if (!r.found && val) pw.warnings.push(`PM「${val}」在人員表找不到`);
+                            if (!r.found && val) pw.warnings.push(`專案「${val}」不詳`);
                             break;
                         }
                         case "sales_id": {
                             pw.sales = val;
                             const r = findStaffId(val, data);
                             pw.salesId = r.id;
-                            if (!r.found && val) pw.warnings.push(`業務「${val}」在人員表找不到`);
+                            if (!r.found && val) pw.warnings.push(`業務「${val}」不詳`);
                             break;
                         }
                         case "structure_id": {
                             pw.structure = val;
                             const r = findStaffId(val, data);
                             pw.structureId = r.id;
-                            if (!r.found && val) pw.warnings.push(`結構「${val}」在人員表找不到`);
+                            if (!r.found && val) pw.warnings.push(`結構人員「${val}」不詳`);
                             break;
                         }
                         case "admin_id": {
                             pw.admin = val;
                             const r = findStaffId(val, data);
                             pw.adminId = r.id;
-                            if (!r.found && val) pw.warnings.push(`行政「${val}」在人員表找不到`);
+                            if (!r.found && val) pw.warnings.push(`行政人員「${val}」不詳`);
                             break;
                         }
                         case "structure_vendor_id": {
                             pw.structureVendor = val;
                             const r = findVendorId(val, data);
                             pw.structureVendorId = r.id;
-                            if (!r.found && val) pw.warnings.push(`支架廠商「${val}」在廠商表找不到`);
+                            if (!r.found && val) pw.warnings.push(`支架廠商「${val}」不詳`);
                             break;
                         }
                         case "electrical_vendor_id": {
                             pw.electricalVendor = val;
                             const r = findVendorId(val, data);
                             pw.electricalVendorId = r.id;
-                            if (!r.found && val) pw.warnings.push(`電力廠商「${val}」在廠商表找不到`);
+                            if (!r.found && val) pw.warnings.push(`電力廠商「${val}」不詳`);
                             break;
                         }
                         case "status_flag": pw.statusFlag = val; break;
-                        case "projected_meter_date": pw.projectedMeterDate = val; break;
+                        case "projected_meter_date": pw.projectedMeterDate = cleanDateValue(val); break;
                     }
                 });
 
+                // --- Deduplication and Status Detection ---
+                let existing = null;
+                if (pw.case_no) {
+                    existing = data.existingProjects.find(ep => ep.case_no === pw.case_no);
+                }
+                if (!existing && pw.name) {
+                    const normNew = normalizeName(pw.name);
+                    existing = data.existingProjects.find(ep => normalizeName(ep.name) === normNew);
+                }
+
+                if (existing) {
+                    pw.importStatus = "update";
+                    // Check address change
+                    const normNewAddr = normalizeName(pw.address || "");
+                    const normOldAddr = normalizeName(existing.address || "");
+                    if (normNewAddr && normOldAddr && normNewAddr !== normOldAddr) {
+                        pw.importStatus = "address_change";
+                    }
+                } else {
+                    pw.importStatus = "new";
+                }
+
                 // Warnings
-                if (!pw.name) pw.warnings.push("缺少案場名稱");
-                if (pw.kwp === null) pw.warnings.push("缺少容量");
-                if (data.existingProjectNames.includes(pw.name)) pw.warnings.push("可能重複（系統已有同名專案）");
+                if (!pw.name) pw.warnings.push("缺少案件名稱");
+                if (pw.importStatus === "update") pw.warnings.push("更新現有案件");
+                if (pw.importStatus === "address_change") pw.warnings.push("地址異動(舊址將存入歷程)");
 
                 return pw;
             });
@@ -346,12 +445,13 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
 
             // Build step previews
             const steps: StepPreviewRow[] = [];
-            rows.forEach((row, ri) => {
+            rows.forEach((row: string[], ri: number) => {
                 const projectName = nameColIdx >= 0 ? (row[nameColIdx] || `第${ri + 2}列`) : `第${ri + 2}列`;
                 mappings.forEach((m, ci) => {
                     if (m.target.table !== "project_steps") return;
                     const val = row[ci] || "";
-                    if (!val) return;
+                    const cleanedVal = cleanDateValue(val);
+                    if (!cleanedVal) return;
                     const t = m.target as { table: "project_steps"; stepName: string; dateType: "planned" | "actual" };
                     // Find or create entry
                     let existing = steps.find(s => s.rowIndex === ri + 2 && s.stepName === t.stepName);
@@ -359,18 +459,19 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                         existing = { rowIndex: ri + 2, projectName, stepName: t.stepName, plannedDate: null, actualDate: null };
                         steps.push(existing);
                     }
-                    if (t.dateType === "planned") existing.plannedDate = val;
-                    else existing.actualDate = val;
+                    if (t.dateType === "planned") existing.plannedDate = cleanedVal;
+                    else existing.actualDate = cleanedVal;
                 });
             });
             setStepPreviews(steps);
 
             // Unmapped columns
-            const unmapped = mappings.filter(m => m.target.table === "ignore").map(m => m.sourceColumn);
+            const unmapped = mappings.filter(m => m.target.table === "ignore" && !PROJECT_FIELD_RULES.some(r => r.patterns.some(p => p.test(m.sourceColumn))) && !detectStepColumn(m.sourceColumn)).map(m => m.sourceColumn);
             setUnmappedColumns(unmapped);
 
             setStep(3);
         } catch (err: any) {
+            console.error("Preview Error:", err);
             alert(`載入參照資料失敗：\n${err.message}`);
         } finally {
             setIsLoadingLookup(false);
@@ -379,7 +480,7 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
 
     // ---- Mapping change handler ----
     const handleMappingChange = (colIndex: number, value: string) => {
-        setMappings(prev => {
+        setMappings((prev: ColumnMapping[]) => {
             const next = [...prev];
             if (value === "ignore") {
                 next[colIndex] = { ...next[colIndex], target: { table: "ignore" } };
@@ -396,6 +497,70 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
             }
             return next;
         });
+    };
+
+    // ---- Step 4: Final Execution ----
+    const handleFormalImport = async () => {
+        if (projectPreviews.length === 0) return;
+        setIsImporting(true);
+        console.log("[Import] Starting formal import...");
+        console.log("[Import] Projects to import:", projectPreviews.length);
+        console.log("[Import] Steps to import:", stepPreviews.length);
+
+        try {
+            const projectsToImport = projectPreviews.map((p: ProjectPreviewRow) => ({
+                rowIndex: p.rowIndex,
+                case_no: p.case_no,
+                name: p.name,
+                sale_type: p.sale_type,
+                address: p.address,
+                kwp: p.kwp || 0,
+                engineer_id: p.engineerId,
+                project_manager_id: p.pmId,
+                sales_id: p.salesId,
+                structure_id: p.structureId,
+                admin_id: p.adminId,
+                structure_vendor_id: p.structureVendorId,
+                electrical_vendor_id: p.electricalVendorId,
+                status_flag: p.statusFlag || "進行中",
+                projected_meter_date: p.projectedMeterDate,
+                owners: {
+                    sales: p.sales || "未指定",
+                    pm: p.pm || "未指定",
+                    engineering: p.engineer || "未指定",
+                    structural: p.structure || "未指定",
+                    admin: p.admin || "未指定"
+                }
+            }));
+
+            const stepsToImport = stepPreviews.map((s: StepPreviewRow) => ({
+                rowIndex: s.rowIndex,
+                template_step_key: s.stepName,
+                step_name: s.stepName,
+                baseline_date: s.plannedDate,
+                current_planned_date: s.plannedDate,
+                actual_date: s.actualDate,
+                sort_order: 99,
+            }));
+
+            const res = await performImportAction({
+                projects: projectsToImport,
+                steps: stepsToImport,
+            });
+
+            console.log("[Import] Server Response:", res);
+            setImportResults(res);
+            setStep(4);
+            
+            if (res.projectsCreated > 0) {
+                router.refresh();
+            }
+        } catch (err: any) {
+            console.error("[Import] Frontend Error:", err);
+            alert(`匯入失敗，發生非預期錯誤：\n${err.message}`);
+        } finally {
+            setIsImporting(false);
+        }
     };
 
     if (!isOpen) return null;
@@ -417,15 +582,15 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                     <div className="flex items-center gap-4">
                         <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">批次匯入專案</h2>
                         <div className="flex items-center gap-1">
-                            {[1, 2, 3].map(s => (
+                            {[1, 2, 3, 4].map(s => (
                                 <div key={s} className="flex items-center gap-1">
                                     <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${step >= s ? "bg-blue-600 text-white" : "bg-zinc-200 text-zinc-500 dark:bg-zinc-700"}`}>
                                         {s}
                                     </div>
                                     <span className={`text-xs font-medium mx-1 ${step >= s ? "text-blue-700 dark:text-blue-400" : "text-zinc-400"}`}>
-                                        {s === 1 ? "上傳" : s === 2 ? "對照" : "預覽"}
+                                        {s === 1 ? "上傳" : s === 2 ? "對照" : s === 3 ? "預覽" : "完成"}
                                     </span>
-                                    {s < 3 && <div className={`w-6 h-0.5 ${step > s ? "bg-blue-400" : "bg-zinc-200 dark:bg-zinc-700"}`} />}
+                                    {s < 4 && <div className={`w-6 h-0.5 ${step > s ? "bg-blue-400" : "bg-zinc-200 dark:bg-zinc-700"}`} />}
                                 </div>
                             ))}
                         </div>
@@ -508,7 +673,7 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                                        {mappings.map((m, ci) => {
+                                        {mappings.map((m: ColumnMapping, ci: number) => {
                                             const targetValue = m.target.table === "ignore"
                                                 ? "ignore"
                                                 : m.target.table === "projects"
@@ -536,12 +701,12 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                                                                 ))}
                                                             </optgroup>
                                                             <optgroup label="project_steps 流程日期">
-                                                                {/* If auto-detected as step, show that option */}
-                                                                {m.target.table === "project_steps" && (
-                                                                    <option value={targetValue}>
-                                                                        {(m.target as any).stepName} ({(m.target as any).dateType === "planned" ? "預計日" : "實際日"})
-                                                                    </option>
-                                                                )}
+                                                                {lookup?.allStepNames.map(sn => (
+                                                                    <React.Fragment key={sn}>
+                                                                        <option value={`step_planned:${sn}`}>{sn} (預計日)</option>
+                                                                        <option value={`step_actual:${sn}`}>{sn} (實際日)</option>
+                                                                    </React.Fragment>
+                                                                ))}
                                                             </optgroup>
                                                             <optgroup label="其他">
                                                                 <option value="ignore">（不匯入）</option>
@@ -567,19 +732,21 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                             <div className="grid grid-cols-4 gap-3">
                                 <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/50 rounded-xl p-4 text-center">
                                     <div className="text-2xl font-black text-blue-700 dark:text-blue-400">{projectPreviews.length}</div>
-                                    <div className="text-xs text-blue-600 dark:text-blue-300 font-bold">專案筆數</div>
+                                    <div className="text-xs text-blue-600 dark:text-blue-300 font-bold uppercase tracking-wider">Projects</div>
                                 </div>
                                 <div className="bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800/50 rounded-xl p-4 text-center">
                                     <div className="text-2xl font-black text-purple-700 dark:text-purple-400">{stepPreviews.length}</div>
-                                    <div className="text-xs text-purple-600 dark:text-purple-300 font-bold">流程日期筆數</div>
+                                    <div className="text-xs text-purple-600 dark:text-purple-300 font-bold uppercase tracking-wider">Steps</div>
                                 </div>
                                 <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/50 rounded-xl p-4 text-center">
                                     <div className="text-2xl font-black text-amber-700 dark:text-amber-400">{warningRows.length}</div>
-                                    <div className="text-xs text-amber-600 dark:text-amber-300 font-bold">警告筆數</div>
+                                    <div className="text-xs text-amber-600 dark:text-amber-300 font-bold uppercase tracking-wider">Issues</div>
                                 </div>
                                 <div className="bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl p-4 text-center">
-                                    <div className="text-2xl font-black text-zinc-700 dark:text-zinc-300">{unmappedColumns.length}</div>
-                                    <div className="text-xs text-zinc-500 font-bold">未使用欄位</div>
+                                    <div className="text-2xl font-black text-zinc-700 dark:text-zinc-300">
+                                        {mappings.filter(m => m.target.table === "ignore").length}
+                                    </div>
+                                    <div className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Skipped Cols</div>
                                 </div>
                             </div>
 
@@ -624,13 +791,15 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                                         <thead className="bg-zinc-50 dark:bg-zinc-800/80">
                                             <tr>
                                                 <th className="px-3 py-2 text-left font-bold text-zinc-500">列</th>
-                                                <th className="px-3 py-2 text-left font-bold text-zinc-500">案場名稱</th>
+                                                <th className="px-3 py-2 text-left font-bold text-zinc-500">動作</th>
+                                                <th className="px-3 py-2 text-left font-bold text-zinc-500">案號</th>
+                                                <th className="px-3 py-2 text-left font-bold text-zinc-500">案件名稱</th>
+                                                <th className="px-3 py-2 text-left font-bold text-zinc-500">型態</th>
                                                 <th className="px-3 py-2 text-left font-bold text-zinc-500">kWp</th>
                                                 <th className="px-3 py-2 text-left font-bold text-zinc-500">工程</th>
-                                                <th className="px-3 py-2 text-left font-bold text-zinc-500">PM</th>
+                                                <th className="px-3 py-2 text-left font-bold text-zinc-500">專案</th>
                                                 <th className="px-3 py-2 text-left font-bold text-zinc-500">業務</th>
                                                 <th className="px-3 py-2 text-left font-bold text-zinc-500">廠商</th>
-                                                <th className="px-3 py-2 text-left font-bold text-zinc-500">掛表</th>
                                                 <th className="px-3 py-2 text-left font-bold text-zinc-500">警告</th>
                                             </tr>
                                         </thead>
@@ -638,42 +807,48 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                                             {projectPreviews.slice(0, 50).map(p => (
                                                 <tr key={p.rowIndex} className={p.warnings.length > 0 ? "bg-amber-50/50 dark:bg-amber-900/5" : ""}>
                                                     <td className="px-3 py-2 text-zinc-400">{p.rowIndex}</td>
+                                                    <td className="px-3 py-2">
+                                                        {p.importStatus === "new" && <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold">新增</span>}
+                                                        {p.importStatus === "update" && <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-bold">更新</span>}
+                                                        {p.importStatus === "address_change" && <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-bold">地址異動</span>}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{p.case_no || "—"}</td>
                                                     <td className="px-3 py-2 font-medium text-zinc-800 dark:text-zinc-200">{p.name || <span className="text-red-500">缺</span>}</td>
-                                                    <td className="px-3 py-2 font-mono text-zinc-600 dark:text-zinc-400">{p.kwp ?? <span className="text-red-500">缺</span>}</td>
+                                                    <td className="px-3 py-2 text-[10px] text-zinc-500">{p.sale_type || "—"}</td>
+                                                    <td className="px-3 py-2 font-mono text-zinc-600 dark:text-zinc-400">{p.kwp ?? "—"}</td>
                                                     <td className="px-3 py-2">
                                                         {p.engineer ? (
-                                                            <span className={p.engineerId ? "text-emerald-600" : "text-red-600 font-bold"}>
-                                                                {p.engineer} {!p.engineerId && "⚠"}
+                                                            <span className={p.engineerId ? "text-emerald-600" : "text-amber-600 font-bold"}>
+                                                                {p.engineer} {!p.engineerId && "❓"}
                                                             </span>
                                                         ) : <span className="text-zinc-300">—</span>}
                                                     </td>
                                                     <td className="px-3 py-2">
                                                         {p.pm ? (
-                                                            <span className={p.pmId ? "text-emerald-600" : "text-red-600 font-bold"}>
-                                                                {p.pm} {!p.pmId && "⚠"}
+                                                            <span className={p.pmId ? "text-emerald-600" : "text-amber-600 font-bold"}>
+                                                                {p.pm} {!p.pmId && "❓"}
                                                             </span>
                                                         ) : <span className="text-zinc-300">—</span>}
                                                     </td>
                                                     <td className="px-3 py-2">
                                                         {p.sales ? (
-                                                            <span className={p.salesId ? "text-emerald-600" : "text-red-600 font-bold"}>
-                                                                {p.sales} {!p.salesId && "⚠"}
+                                                            <span className={p.salesId ? "text-emerald-600" : "text-amber-600 font-bold"}>
+                                                                {p.sales} {!p.salesId && "❓"}
                                                             </span>
                                                         ) : <span className="text-zinc-300">—</span>}
                                                     </td>
                                                     <td className="px-3 py-2">
                                                         {p.structureVendor ? (
-                                                            <span className={p.structureVendorId ? "text-emerald-600" : "text-red-600 font-bold"}>
-                                                                {p.structureVendor} {!p.structureVendorId && "⚠"}
+                                                            <span className={p.structureVendorId ? "text-emerald-600" : "text-amber-600 font-bold"}>
+                                                                {p.structureVendor} {!p.structureVendorId && "❓"}
                                                             </span>
                                                         ) : <span className="text-zinc-300">—</span>}
                                                     </td>
-                                                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{p.projectedMeterDate || "—"}</td>
                                                     <td className="px-3 py-2">
                                                         {p.warnings.length > 0 ? (
                                                             <div className="flex flex-col gap-0.5">
                                                                 {p.warnings.map((w, i) => (
-                                                                    <span key={i} className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/20 px-1.5 py-0.5 rounded">{w}</span>
+                                                                    <span key={i} className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/20 px-1.5 py-0.5 rounded whitespace-nowrap">{w}</span>
                                                                 ))}
                                                             </div>
                                                         ) : <span className="text-emerald-500">✓</span>}
@@ -730,6 +905,48 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                             )}
                         </div>
                     )}
+
+                    {/* ---- STEP 4: Import Results ---- */}
+                    {step === 4 && importResults && (
+                        <div className="space-y-6 text-center py-8">
+                            <div className="mx-auto w-20 h-20 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center mb-4">
+                                <svg className="w-10 h-10 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                            </div>
+                            <h3 className="text-2xl font-black text-zinc-800 dark:text-zinc-100">匯入完成</h3>
+                            <div className="grid grid-cols-2 gap-4 max-w-sm mx-auto">
+                                <div className="bg-zinc-50 dark:bg-zinc-800 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
+                                    <div className="text-3xl font-black text-blue-600">{importResults.projectsCreated}</div>
+                                    <div className="text-xs text-zinc-500 font-bold">案件已建立</div>
+                                </div>
+                                <div className="bg-zinc-50 dark:bg-zinc-800 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
+                                    <div className="text-3xl font-black text-purple-600">{importResults.stepsCreated}</div>
+                                    <div className="text-xs text-zinc-500 font-bold">流程日期已寫入</div>
+                                </div>
+                            </div>
+
+                            {importResults.errors.length > 0 && (
+                                <div className="max-w-md mx-auto mt-6 text-left">
+                                    <div className="text-sm font-bold text-red-600 mb-2">匯入過程中的錯誤：</div>
+                                    <div className="bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 rounded-lg p-3 max-h-40 overflow-y-auto text-xs font-mono text-red-800 dark:text-red-300">
+                                        {importResults.errors.map((err, i) => (
+                                            <div key={i} className="mb-1">• {err}</div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="pt-6">
+                                <button
+                                    onClick={() => {
+                                        window.location.reload(); // Quick way to refresh project list
+                                    }}
+                                    className="px-8 py-3 bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 rounded-xl font-bold hover:opacity-90 transition-opacity"
+                                >
+                                    完成並關閉
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Footer */}
@@ -760,9 +977,21 @@ export default function BatchImportModal({ isOpen, onClose }: { isOpen: boolean;
                             </button>
                         )}
                         {step === 3 && (
-                            <span className="text-xs text-zinc-400 font-medium italic">
-                                目前為預覽模式，尚未寫入資料庫
-                            </span>
+                            <button
+                                onClick={handleFormalImport}
+                                disabled={isImporting || projectPreviews.length === 0}
+                                className="px-6 py-2 text-sm font-bold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-600/20 disabled:opacity-50"
+                            >
+                                {isImporting ? "匯入中..." : "正式匯入檔案"}
+                            </button>
+                        )}
+                        {step === 4 && (
+                            <button
+                                onClick={() => window.location.reload()}
+                                className="px-6 py-2 text-sm font-bold bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 rounded-lg"
+                            >
+                                結束
+                            </button>
                         )}
                     </div>
                 </div>

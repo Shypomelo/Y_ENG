@@ -185,13 +185,13 @@ export const departmentFlows: Record<DeptCode, DepartmentFlow> = {
                 "dept": "專案",
                 "name": "審查意見書取得",
                 "depends_on": [],
-                "base_offset_days": -10,
+                "base_offset_days": 10,
                 "kw_tiers": [
-                    { "maxKW": 20, "days": -10 },
-                    { "maxKW": 100, "days": -10 },
-                    { "maxKW": 300, "days": -10 },
-                    { "maxKW": 500, "days": -10 },
-                    { "maxKW": 999999, "days": -10 }
+                    { "maxKW": 20, "days": 10 },
+                    { "maxKW": 100, "days": 10 },
+                    { "maxKW": 300, "days": 10 },
+                    { "maxKW": 500, "days": 10 },
+                    { "maxKW": 999999, "days": 10 }
                 ],
                 "is_core": true
             },

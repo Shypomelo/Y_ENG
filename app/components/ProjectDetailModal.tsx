@@ -5,6 +5,7 @@ import { ProjectFlowPlan, createProjectFlowPlan, DateCorrectionLog } from "../..
 import { flowTemplate, FlowNode } from "../../lib/mock/flow_template";
 
 import { useProjects } from "../providers/projects-store";
+import * as projectsRepo from "../../lib/repositories/projects";
 
 
 // --- Procurement Options ---
@@ -245,6 +246,56 @@ export default function ProjectDetailModal({
     const [closeError, setCloseError] = useState("");
     const [statusTexts, setStatusTexts] = useState<Record<string, { power: string, structure: string, admin: string, engineering: string }>>({});
     const [isEditingStatus, setIsEditingStatus] = useState(false);
+
+    // --- Inline Edit State ---
+    const [editingField, setEditingField] = useState<string | null>(null);
+    const [editValue, setEditValue] = useState<string>("");
+
+    const handleStartEdit = (field: string, value: string) => {
+        setEditingField(field);
+        setEditValue(value);
+    };
+
+    const handleCancelEdit = () => setEditingField(null);
+
+    const handleSaveEdit = async (value?: string) => {
+        if (!selectedProject || !editingField) return;
+        const valToSave = value !== undefined ? value : editValue;
+
+        let updatePatch: any = {};
+        let dbUpdate: any = {};
+
+        try {
+            if (editingField === "kWp") {
+                const val = parseFloat(valToSave) || 0;
+                updatePatch = { kWp: val };
+                dbUpdate = { kwp: val };
+            } else if (editingField === "project_name") {
+                updatePatch = { project_name: valToSave };
+                dbUpdate = { name: valToSave };
+            } else if (editingField === "case_no") {
+                updatePatch = { case_no: valToSave };
+                dbUpdate = { case_no: valToSave };
+            } else if (editingField === "sale_type") {
+                updatePatch = { sale_type: valToSave };
+                dbUpdate = { sale_type: valToSave };
+            }
+
+            // Persistence
+            if (Object.keys(dbUpdate).length > 0) {
+                await projectsRepo.updateProjectBasicInfo(selectedProject.project_id, dbUpdate);
+            }
+
+            // UI Update
+            setProjects(prev => prev.map(p =>
+                p.project_id === selectedProject.project_id ? { ...p, ...updatePatch } : p
+            ));
+            setEditingField(null);
+        } catch (err) {
+            console.error("Save edit failed:", err);
+            alert("儲存失敗，請重試");
+        }
+    };
 
     // --- Second Level Detail Modal Tab State ---
     const [detailActiveTab, setDetailActiveTab] = useState<"流程" | "工程">("流程");
@@ -564,7 +615,68 @@ export default function ProjectDetailModal({
 
                     <div className="relative flex flex-col w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-900 dark:ring-1 dark:ring-zinc-800">
                         <div className="flex-none items-center flex justify-between border-b border-zinc-100 bg-zinc-50/50 px-6 pt-4 dark:border-zinc-800 dark:bg-zinc-900/50">
-                            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">專案流程計畫 ({selectedProject.project_name})</h2>
+                            <div className="flex flex-col gap-1 py-1">
+                                <div className="flex items-center gap-2">
+                                    <span 
+                                        className="text-xs font-bold text-zinc-500 font-mono cursor-pointer hover:text-blue-600"
+                                        onDoubleClick={() => handleStartEdit("case_no", selectedProject.case_no || "")}
+                                        title="雙擊編輯案號"
+                                    >
+                                        {editingField === "case_no" ? (
+                                            <input 
+                                                autoFocus
+                                                className="bg-white dark:bg-zinc-800 border border-blue-500 rounded px-1 py-0 w-32 outline-none"
+                                                value={editValue}
+                                                onChange={(e) => setEditValue(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveEdit(); if (e.key === 'Escape') handleCancelEdit(); }}
+                                            />
+                                        ) : (
+                                            `#${selectedProject.case_no || "無案號"}`
+                                        )}
+                                    </span>
+                                    <span 
+                                        className="text-blue-600 dark:text-blue-400 text-[10px] font-bold bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded border border-blue-100 dark:border-blue-800 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/60"
+                                        onDoubleClick={() => handleStartEdit("sale_type", selectedProject.sale_type || "")}
+                                        title="雙擊編輯躉售類別"
+                                    >
+                                        {editingField === "sale_type" ? (
+                                            <select
+                                                autoFocus
+                                                className="bg-transparent border border-blue-500 rounded px-1 py-0 text-[10px] font-bold outline-none"
+                                                value={editValue}
+                                                onChange={(e) => handleSaveEdit(e.target.value)}
+                                                onBlur={() => handleSaveEdit()}
+                                            >
+                                                <option value="全躉">全躉</option>
+                                                <option value="餘躉">餘躉</option>
+                                                <option value="自用">自用</option>
+                                            </select>
+                                        ) : (
+                                            selectedProject.sale_type || "未指定類別"
+                                        )}
+                                    </span>
+                                </div>
+                                <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 pr-8 flex items-center gap-3">
+                                    {editingField === "project_name" ? (
+                                        <input 
+                                            autoFocus
+                                            className="bg-white dark:bg-zinc-800 border border-blue-500 rounded px-2 py-0 w-full max-w-md outline-none"
+                                            value={editValue}
+                                            onChange={(e) => setEditValue(e.target.value)}
+                                            onBlur={() => handleSaveEdit()}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') handleSaveEdit(); if (e.key === 'Escape') handleCancelEdit(); }}
+                                        />
+                                    ) : (
+                                        <>
+                                            <span onDoubleClick={() => handleStartEdit("project_name", selectedProject.project_name)} className="cursor-pointer hover:text-blue-600">{selectedProject.project_name}</span>
+                                            <span className="text-sm font-normal text-zinc-600 bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 px-2 py-0.5 rounded-md border border-zinc-300 dark:border-zinc-600 shrink-0 select-none cursor-pointer" onDoubleClick={() => handleStartEdit("kWp", String(selectedProject.kWp))}>
+                                                {selectedProject.kWp} Kwp
+                                            </span>
+                                        </>
+                                    )}
+                                </h2>
+                            </div>
                             <button
                                 onClick={() => onClose()}
                                 className="rounded-full p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors"
@@ -696,6 +808,7 @@ export default function ProjectDetailModal({
                                                         <div className="min-w-0">
                                                             <div className="flex items-center gap-2 flex-wrap">
                                                                 <h4 className="text-base font-bold text-zinc-900 dark:text-zinc-100 truncate">{step.name}</h4>
+                                                                <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">[{step.id}]</span>
                                                                 <span className="text-[10px] font-bold px-1.5 py-0.5 bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 rounded">
                                                                     {step.lane}
                                                                 </span>

@@ -1,0 +1,141 @@
+{
+  "file_evidence": {
+    "projects": {
+      "path": "D:\\工程系統\\maintenance-probe\\probe-output\\console\\project-records.normalized.json",
+      "rows": 166
+    },
+    "reports": {
+      "path": "D:\\工程系統\\maintenance-probe\\probe-output\\console\\maintenance-reports.normalized.json",
+      "rows": 28
+    }
+  },
+  "mapping_stats": {
+    "total_reports": 28,
+    "matched_by_no": 1,
+    "matched_by_name_exact": 0,
+    "matched_by_name_fuzzy": 0,
+    "unmatched": 27,
+    "success_rate": "3.57%",
+    "samples": {
+      "matched": [
+        {
+          "actual_case_no": "D2486001",
+          "actual_case_name": "測試勿動-維運",
+          "actual_region": "南區",
+          "report_time": "2026/3/21 17:35",
+          "report_issue": "[其他]",
+          "matched_by": "case_no",
+          "matched_project": {
+            "case_no": "C2486001",
+            "case_name": "測試勿動",
+            "address": "台南市仁德區文山三街8號",
+            "project_status": "進行中"
+          }
+        }
+      ],
+      "unmatched": [
+        {
+          "actual_case_no": "22SR187",
+          "actual_case_name": "沈素珍",
+          "actual_region": "南區",
+          "report_time": "2026/3/20 16:14",
+          "report_issue": "[優化器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "23SR092",
+          "actual_case_name": "陽光電力-商尼製輪實業(一)",
+          "actual_region": "南區",
+          "report_time": "2026/3/20 15:28",
+          "report_issue": "[優化器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "23SR101",
+          "actual_case_name": "明澤興業-川其開發",
+          "actual_region": "南區",
+          "report_time": "2026/3/20 15:23",
+          "report_issue": "[優化器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "19S095",
+          "actual_case_name": "林梅雪",
+          "actual_region": "北區",
+          "report_time": "2026/3/20 15:11",
+          "report_issue": "[其他]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "19S085",
+          "actual_case_name": "福松老人養護中心",
+          "actual_region": "南區",
+          "report_time": "2026/3/20 14:05",
+          "report_issue": "[優化器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "23SR063",
+          "actual_case_name": "旭森川-陳畹麒",
+          "actual_region": "南區",
+          "report_time": "2026/3/20 12:25",
+          "report_issue": "[變流器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "23SR085",
+          "actual_case_name": "旭森川-陳文永",
+          "actual_region": "南區",
+          "report_time": "2026/3/20 10:57",
+          "report_issue": "[優化器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "21SR160",
+          "actual_case_name": "成大誠-陳秋鎮",
+          "actual_region": "中區",
+          "report_time": "2026/3/20 10:57",
+          "report_issue": "[優化器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "20S193",
+          "actual_case_name": "城大誠-陳淑滿",
+          "actual_region": "中區",
+          "report_time": "2026/3/20 10:56",
+          "report_issue": "[變流器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        },
+        {
+          "actual_case_no": "21SR085",
+          "actual_case_name": "成大誠-吳唯禎",
+          "actual_region": "中區",
+          "report_time": "2026/3/20 10:56",
+          "report_issue": "[優化器異常]",
+          "matched_by": "unmatched",
+          "matched_project": null
+        }
+      ]
+    }
+  },
+  "model_recommendation": {
+    "case_no": "reports (Col 0, Line 2)",
+    "case_name": "reports (Col 0, Line 1)",
+    "region": "reports (Col 0, Line 0)",
+    "report_time": "reports (Col 1, Line 0)",
+    "report_issue": "reports (Col 1, Line 2)",
+    "repair_status": "reports (Col 4, Line 0)",
+    "address": "projects (Lookup by case_no/name)",
+    "site_contact_name": "future (Not found in current extraction)",
+    "site_contact_phone": "future (Not found in current extraction)"
+  }
+}

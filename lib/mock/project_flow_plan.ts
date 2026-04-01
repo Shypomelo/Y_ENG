@@ -12,7 +12,8 @@ export type DateCorrectionLog = {
 };
 
 export type ProjectFlowStepPlan = {
-    id: string; // P-002..P-008
+    id: string; // E-001, P-001 etc.
+    db_id?: string; // Database UUID
     name: string;
     lane: "工程" | "專案" | "業務" | "結構" | "行政";
     offset_days: number;
@@ -30,18 +31,31 @@ export type ProjectFlowStepPlan = {
 export type ProjectFlowPlan = {
     project_id: string;
     project_name: string;
+    case_no?: string;
+    address?: string;
+    sale_type?: string;
     start_date: string;
     project_status: "進行中" | "已結案";
     kWp: number;
     isImportant: boolean;
+    projectedMeterDate?: string;
     owners?: {
         engineering?: string;
         pm?: string;
         structural?: string;
         admin?: string;
         sales?: string;
+        engineer_id?: string;
+        pm_id?: string;
+        structural_id?: string;
+        admin_id?: string;
+        sales_id?: string;
         vendor_structure?: string;
         vendor_power?: string;
+        status_power?: string;
+        status_structure?: string;
+        status_admin?: string;
+        status_engineering?: string;
     };
     enginePlan?: {
         entry_date?: string;
@@ -74,7 +88,10 @@ export function createProjectFlowPlan(
     project_name: string,
     start_date: string,
     kWp: number = Math.floor(Math.random() * 200) + 10,
-    owners?: ProjectFlowPlan["owners"]
+    owners?: ProjectFlowPlan["owners"],
+    case_no?: string,
+    address?: string,
+    sale_type?: string
 ): ProjectFlowPlan {
     const coreFlows = flowTemplate.filter(node => node.is_core);
     const steps: ProjectFlowStepPlan[] = coreFlows.map((node, index) => {
@@ -93,6 +110,9 @@ export function createProjectFlowPlan(
     return {
         project_id,
         project_name,
+        case_no,
+        address,
+        sale_type,
         start_date,
         project_status: "進行中",
         kWp,

@@ -6,9 +6,8 @@ export function createAdminClient() {
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY
 
     if (!url || !key) {
-        throw new Error(
-            'Missing Supabase env vars: NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY'
-        )
+        console.error('Supabase admin client error: Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
+        throw new Error('Supabase Admin Configuration Missing')
     }
 
     return createSupabaseClient<Database>(url, key, {

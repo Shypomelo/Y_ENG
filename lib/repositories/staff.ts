@@ -4,16 +4,24 @@ import { createAdminClient } from '../supabase/admin'
 import { StaffMember } from '../types/database'
 
 export async function listStaffByDepartment(department?: string): Promise<StaffMember[]> {
-    const supabase = createAdminClient()
-    let query = supabase.from('staff_members').select('*').eq('is_active', true)
+    try {
+        const supabase = createAdminClient()
+        let query = supabase.from('staff_members').select('*').eq('is_active', true)
 
-    if (department) {
-        query = query.eq('department', department)
+        if (department) {
+            query = query.eq('department', department)
+        }
+
+        const { data, error } = await query.order('created_at', { ascending: true })
+        if (error) {
+            console.error('listStaffByDepartment Error:', error.message);
+            return [];
+        }
+        return data || []
+    } catch (err: any) {
+        console.error('listStaffByDepartment Configuration Error:', err.message);
+        return [];
     }
-
-    const { data, error } = await query.order('created_at', { ascending: true })
-    if (error) throw error
-    return data || []
 }
 
 export async function createStaff(name: string, department: string): Promise<StaffMember> {

@@ -1,52 +1,73 @@
 "use server";
 
 import { createAdminClient } from '../supabase/admin'
-import { Project, ProjectStep } from '../types/database'
+import { Database, Project, ProjectStep } from '../types/database'
+
+type ProjectInsert = Database['public']['Tables']['projects']['Insert']
 
 export async function listProjects(): Promise<Project[]> {
-    const supabase = createAdminClient()
-    const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .order('created_at', { ascending: false })
+    try {
+        const supabase = createAdminClient()
+        const { data, error } = await supabase
+            .from('projects')
+            .select('*')
+            .order('created_at', { ascending: false })
 
-    if (error) throw error
-    return data || []
+        if (error) {
+            console.error('listProjects Error:', error.message);
+            return [];
+        }
+        return data || []
+    } catch (err: any) {
+        console.error('listProjects Configuration Error:', err.message);
+        return [];
+    }
 }
 
 export async function listProjectsWithSteps(): Promise<{ project: Project, steps: ProjectStep[] }[]> {
-    const supabase = createAdminClient()
+    try {
+        const supabase = createAdminClient()
 
-    // 1. Fetch all projects
-    const { data: projects, error: projectsError } = await supabase
-        .from('projects')
-        .select('*')
-        .order('created_at', { ascending: false })
+        // 1. Fetch all projects
+        const { data: projects, error: projectsError } = await supabase
+            .from('projects')
+            .select('*')
+            .order('created_at', { ascending: false })
 
-    if (projectsError) throw projectsError
-    if (!projects || projects.length === 0) return []
+        if (projectsError) {
+            console.error('listProjectsWithSteps (Projects) Error:', projectsError.message);
+            return [];
+        }
+        if (!projects || projects.length === 0) return []
 
-    // 2. Fetch all steps for these projects
-    const projectIds = projects.map(p => p.id)
-    const { data: allSteps, error: stepsError } = await supabase
-        .from('project_steps')
-        .select('*')
-        .in('project_id', projectIds)
-        .order('sort_order', { ascending: true })
+        // 2. Fetch all steps for these projects
+        const projectIds = projects.map(p => p.id)
+        const { data: allSteps, error: stepsError } = await supabase
+            .from('project_steps')
+            .select('*')
+            .in('project_id', projectIds)
+            .order('sort_order', { ascending: true })
 
-    if (stepsError) throw stepsError
+        if (stepsError) {
+            console.error('listProjectsWithSteps (Steps) Error:', stepsError.message);
+            // Even if steps fail, we can return projects with empty steps
+        }
 
-    // 3. Group steps by project_id
-    const stepsByProject = (allSteps || []).reduce((acc, step) => {
-        if (!acc[step.project_id]) acc[step.project_id] = []
-        acc[step.project_id].push(step)
-        return acc
-    }, {} as Record<string, ProjectStep[]>)
+        // 3. Group steps by project_id
+        const stepsByProject = (allSteps || []).reduce((acc, step) => {
+            if (!acc[step.project_id]) acc[step.project_id] = []
+            acc[step.project_id].push(step)
+            return acc
+        }, {} as Record<string, ProjectStep[]>)
 
-    return projects.map(project => ({
-        project,
-        steps: stepsByProject[project.id] || []
-    }))
+        return projects.map(project => ({
+            project,
+            steps: stepsByProject[project.id] || []
+        }))
+    } catch (err: any) {
+        console.error('listProjectsWithSteps Configuration Error:', err.message);
+        return [];
+    }
 }
 
 export async function getProjectDetail(projectId: string): Promise<{ project: Project, steps: ProjectStep[] }> {
@@ -66,7 +87,7 @@ export async function getProjectDetail(projectId: string): Promise<{ project: Pr
     }
 }
 
-export async function createProject(project: Omit<Project, 'id' | 'created_at' | 'updated_at' | 'is_important' | 'is_closed'>): Promise<Project> {
+export async function createProject(project: ProjectInsert): Promise<Project> {
     const supabase = createAdminClient()
     const { data, error } = await supabase
         .from('projects')
@@ -182,4 +203,30 @@ export async function updateProjectStepStatus(id: string, status: string, reason
 
     if (error) throw error
     return data
+}
+
+export async function deleteProject(id: string): Promise<void> {
+    const supabase = createAdminClient()
+
+    // 1. Delete associated steps
+    const { error: stepsError } = await supabase
+        .from('project_steps')
+        .delete()
+        .eq('project_id', id)
+
+    if (stepsError) {
+        console.error('deleteProject (Steps) Error:', stepsError.message);
+        throw stepsError;
+    }
+
+    // 2. Delete the project itself
+    const { error: projectError } = await supabase
+        .from('projects')
+        .delete()
+        .eq('id', id)
+
+    if (projectError) {
+        console.error('deleteProject (Project) Error:', projectError.message);
+        throw projectError;
+    }
 }
