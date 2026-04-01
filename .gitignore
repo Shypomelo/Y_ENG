@@ -9,6 +9,11 @@ dist
 *.txt
 tmp/
 *.tsbuildinfo
+# Project Exclusions
+maintenance-probe/
+scripts/
+supabase/
+docs/
 # Debug and migration scripts
 check_*.js
 check_*.ts
@@ -45,3 +50,23 @@ migration_output.txt
 schema_alignment_probe.txt
 build_*.txt
 db_schema.txt
+# Root utility scripts
+apply-*.ts
+apply-*.js
+apply_*.js
+apply_*.ts
+check-*.ts
+check-*.js
+debug-*.js
+debug-*.ts
+probe_*.ts
+probe_*.js
+generate_*.js
+final_*.js
+manual_*.ts
+regenerate.js
+slice.js
+slice_*.js
+tmp_*.ts
+tsc_errors.txt
+tsconfig.tsbuildinfo
