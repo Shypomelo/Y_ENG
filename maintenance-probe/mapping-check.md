@@ -5,7 +5,7 @@
 | :--- | :--- | :--- | :--- |
 | **Projects** | sg_pjm.html (CRUD) | 166 | [project-records.normalized.json](file:///d:/工程系統/maintenance-probe/probe-output/console/project-records.normalized.json) |
 | **All Reports** | sg_ops.html (CRUD) | 28 | [maintenance-reports.normalized.json](file:///d:/工程系統/maintenance-probe/probe-output/console/maintenance-reports.normalized.json) |
-| **North Reports** | Filtered North | 5 | [north-reports.normalized.json](file:///d:/工程系統/maintenance-probe/probe-output/console/north-reports.normalized.json) |
+| **North Reports** | Historical filtered north subset (not current full baseline) | 5 | [north-reports.normalized.json](file:///d:/工程系統/maintenance-probe/probe-output/console/north-reports.normalized.json) |
 
 ## B. Field Completeness Analysis
 - **Project Records**: Contains 17 fields including `case_no`, `case_name`, `address`, `pm`, etc.

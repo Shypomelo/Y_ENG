@@ -445,6 +445,168 @@ export type Database = {
                 }
                 Relationships: []
             }
+            external_maintenance_tickets: {
+                Row: {
+                    id: string
+                    source_system: string
+                    external_id: string | null
+                    fallback_key: string
+                    is_fallback_identity: boolean
+                    identity_confidence: string
+                    source_region: string | null
+                    source_case_no: string | null
+                    source_case_name: string | null
+                    source_report_time: string | null
+                    source_reporter: string | null
+                    source_report_issue: string | null
+                    source_issue_summary: string | null
+                    source_monitor_staff: string | null
+                    source_monitor_judgement: string | null
+                    source_monitor_note: string | null
+                    source_repair_status: string | null
+                    source_repair_staff: string | null
+                    source_repair_note: string | null
+                    source_work_date: string | null
+                    source_complete_date: string | null
+                    source_optimizer_count: number | null
+                    source_payload: Json | null
+                    source_payload_hash: string
+                    source_row_html: string | null
+                    source_dataset: Json | null
+                    source_runtime_meta: Json | null
+                    is_north: boolean
+                    sync_status: string
+                    first_seen_at: string
+                    last_seen_at: string
+                    last_synced_at: string
+                    last_source_updated_at: string | null
+                    linked_maintenance_report_id: string | null
+                    linked_project_id: string | null
+                    writeback_eligible: boolean
+                    writeback_status: string
+                    writeback_candidate: Json | null
+                    writeback_last_checked_at: string | null
+                    writeback_last_attempt_at: string | null
+                    writeback_last_success_at: string | null
+                    writeback_error: string | null
+                    conflict_status: string
+                    conflict_detail: Json | null
+                    created_at: string
+                    updated_at: string
+                }
+                Insert: {
+                    id?: string
+                    source_system: string
+                    external_id?: string | null
+                    fallback_key: string
+                    is_fallback_identity?: boolean
+                    identity_confidence?: string
+                    source_region?: string | null
+                    source_case_no?: string | null
+                    source_case_name?: string | null
+                    source_report_time?: string | null
+                    source_reporter?: string | null
+                    source_report_issue?: string | null
+                    source_issue_summary?: string | null
+                    source_monitor_staff?: string | null
+                    source_monitor_judgement?: string | null
+                    source_monitor_note?: string | null
+                    source_repair_status?: string | null
+                    source_repair_staff?: string | null
+                    source_repair_note?: string | null
+                    source_work_date?: string | null
+                    source_complete_date?: string | null
+                    source_optimizer_count?: number | null
+                    source_payload?: Json | null
+                    source_payload_hash: string
+                    source_row_html?: string | null
+                    source_dataset?: Json | null
+                    source_runtime_meta?: Json | null
+                    is_north?: boolean
+                    sync_status?: string
+                    first_seen_at?: string
+                    last_seen_at?: string
+                    last_synced_at?: string
+                    last_source_updated_at?: string | null
+                    linked_maintenance_report_id?: string | null
+                    linked_project_id?: string | null
+                    writeback_eligible?: boolean
+                    writeback_status?: string
+                    writeback_candidate?: Json | null
+                    writeback_last_checked_at?: string | null
+                    writeback_last_attempt_at?: string | null
+                    writeback_last_success_at?: string | null
+                    writeback_error?: string | null
+                    conflict_status?: string
+                    conflict_detail?: Json | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Update: {
+                    id?: string
+                    source_system?: string
+                    external_id?: string | null
+                    fallback_key?: string
+                    is_fallback_identity?: boolean
+                    identity_confidence?: string
+                    source_region?: string | null
+                    source_case_no?: string | null
+                    source_case_name?: string | null
+                    source_report_time?: string | null
+                    source_reporter?: string | null
+                    source_report_issue?: string | null
+                    source_issue_summary?: string | null
+                    source_monitor_staff?: string | null
+                    source_monitor_judgement?: string | null
+                    source_monitor_note?: string | null
+                    source_repair_status?: string | null
+                    source_repair_staff?: string | null
+                    source_repair_note?: string | null
+                    source_work_date?: string | null
+                    source_complete_date?: string | null
+                    source_optimizer_count?: number | null
+                    source_payload?: Json | null
+                    source_payload_hash?: string
+                    source_row_html?: string | null
+                    source_dataset?: Json | null
+                    source_runtime_meta?: Json | null
+                    is_north?: boolean
+                    sync_status?: string
+                    first_seen_at?: string
+                    last_seen_at?: string
+                    last_synced_at?: string
+                    last_source_updated_at?: string | null
+                    linked_maintenance_report_id?: string | null
+                    linked_project_id?: string | null
+                    writeback_eligible?: boolean
+                    writeback_status?: string
+                    writeback_candidate?: Json | null
+                    writeback_last_checked_at?: string | null
+                    writeback_last_attempt_at?: string | null
+                    writeback_last_success_at?: string | null
+                    writeback_error?: string | null
+                    conflict_status?: string
+                    conflict_detail?: Json | null
+                    created_at?: string
+                    updated_at?: string
+                }
+                Relationships: [
+                    {
+                        foreignKeyName: "external_maintenance_tickets_linked_maintenance_report_id_fkey"
+                        columns: ["linked_maintenance_report_id"]
+                        isOneToOne: false
+                        referencedRelation: "maintenance_reports"
+                        referencedColumns: ["id"]
+                    },
+                    {
+                        foreignKeyName: "external_maintenance_tickets_linked_project_id_fkey"
+                        columns: ["linked_project_id"]
+                        isOneToOne: false
+                        referencedRelation: "projects"
+                        referencedColumns: ["id"]
+                    }
+                ]
+            }
             maintenance_tickets: {
                 Row: {
                     id: string
@@ -496,6 +658,11 @@ export type Database = {
                 Row: {
                     id: string
                     ticket_id: string | null
+                    external_ticket_id: string | null
+                    external_identity_snapshot: string | null
+                    external_payload_hash_at_bind: string | null
+                    external_last_compared_at: string | null
+                    external_conflict_status: string | null
                     case_no: string | null
                     case_name: string
                     address: string | null
@@ -516,6 +683,11 @@ export type Database = {
                 Insert: {
                     id?: string
                     ticket_id?: string | null
+                    external_ticket_id?: string | null
+                    external_identity_snapshot?: string | null
+                    external_payload_hash_at_bind?: string | null
+                    external_last_compared_at?: string | null
+                    external_conflict_status?: string | null
                     case_no?: string | null
                     case_name: string
                     address?: string | null
@@ -536,6 +708,11 @@ export type Database = {
                 Update: {
                     id?: string
                     ticket_id?: string | null
+                    external_ticket_id?: string | null
+                    external_identity_snapshot?: string | null
+                    external_payload_hash_at_bind?: string | null
+                    external_last_compared_at?: string | null
+                    external_conflict_status?: string | null
                     case_no?: string | null
                     case_name?: string
                     address?: string | null
@@ -559,6 +736,13 @@ export type Database = {
                         columns: ["ticket_id"]
                         isOneToOne: false
                         referencedRelation: "maintenance_tickets"
+                        referencedColumns: ["id"]
+                    },
+                    {
+                        foreignKeyName: "maintenance_reports_external_ticket_id_fkey"
+                        columns: ["external_ticket_id"]
+                        isOneToOne: false
+                        referencedRelation: "external_maintenance_tickets"
                         referencedColumns: ["id"]
                     }
                 ]
@@ -911,6 +1095,7 @@ export type ProjectStep = Database['public']['Tables']['project_steps']['Row']
 export type DailySchedule = Database['public']['Tables']['daily_schedules']['Row']
 export type TodoItem = Database['public']['Tables']['todo_items']['Row']
 export type SystemSetting = Database['public']['Tables']['system_settings']['Row']
+export type ExternalMaintenanceTicket = Database['public']['Tables']['external_maintenance_tickets']['Row']
 export type MaintenanceTicket = Database['public']['Tables']['maintenance_tickets']['Row']
 export type MaintenanceReport = Database['public']['Tables']['maintenance_reports']['Row']
 export type MaintenanceReconciliation = Database['public']['Tables']['maintenance_reconciliation']['Row']

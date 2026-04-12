@@ -3,7 +3,12 @@ const path = require('path');
 
 const PROJECTS_PATH = path.join(__dirname, 'probe-output', 'console', 'project-records.normalized.json');
 const REPORTS_PATH = path.join(__dirname, 'probe-output', 'console', 'maintenance-reports.normalized.json');
-const NORTH_REPORTS_PATH = path.join(__dirname, 'probe-output', 'console', 'north-reports.normalized.json');
+const HISTORICAL_NORTH_IN_PROGRESS_SUBSET_PATH = path.join(
+    __dirname,
+    'probe-output',
+    'console',
+    'north-reports.normalized.json'
+);
 
 function loadJson(p) {
     if (!fs.existsSync(p)) return null;

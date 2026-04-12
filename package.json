@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "verify:maintenance-sync": "node tmp/verify-maintenance-sync.js",
+    "verify:maintenance-trigger": "node tmp/verify-maintenance-sync-triggers.js",
+    "verify:maintenance-firestore-readonly": "powershell -ExecutionPolicy Bypass -File tmp\\verify-firestore-browser-list-alignment.ps1"
   },
   "dependencies": {
     "@supabase/ssr": "^0.9.0",
