@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { MaintenanceReport, InventoryMaster } from "../../../lib/types/database";
 import * as actions from "../actions";
 import { useProjects } from "../../providers/projects-store";
+import { formatProjectName } from "../../../lib/utils/formatters";
 
 interface Technician {
     id: string;
@@ -35,7 +36,22 @@ interface MaintenanceReportModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSave: () => void;
-    initialData?: Partial<MaintenanceReport> & { ticket_id?: string };
+    initialData?: Partial<MaintenanceReport> & {
+        ticket_id?: string;
+        conflict_status?: string | null;
+        latest_external_diff?: {
+            address?: string | null;
+            site_contact_name?: string | null;
+            site_contact_phone?: string | null;
+            status?: string | null;
+            monitor_staff?: string | null;
+            monitor_judgement?: string | null;
+            repair_staff?: string | null;
+            work_date?: string | null;
+            complete_date?: string | null;
+            external_note?: string | null;
+        } | null;
+    };
 }
 
 export default function MaintenanceReportModal({ isOpen, onClose, onSave, initialData }: MaintenanceReportModalProps) {
@@ -70,6 +86,40 @@ export default function MaintenanceReportModal({ isOpen, onClose, onSave, initia
 
     const [inventory, setInventory] = useState<any[]>([]);
     const [isSaving, setIsSaving] = useState(false);
+
+    const refreshDiffItems = (() => {
+        const latest = (initialData as any)?.latest_external_diff;
+        if ((initialData as any)?.conflict_status !== "needs_refresh" || !latest) {
+            return [];
+        }
+
+        return [
+            {
+                key: "address",
+                label: "地址",
+                previous: (formData.address || "").trim(),
+                latest: (latest.address || "").trim(),
+            },
+            {
+                key: "site_contact_name",
+                label: "聯絡人",
+                previous: (formData.site_contact_name || "").trim(),
+                latest: (latest.site_contact_name || "").trim(),
+            },
+            {
+                key: "site_contact_phone",
+                label: "聯絡電話",
+                previous: (formData.site_contact_phone || "").trim(),
+                latest: (latest.site_contact_phone || "").trim(),
+            },
+            {
+                key: "status",
+                label: "狀態",
+                previous: (formData.status || "").trim(),
+                latest: (latest.status || "").trim(),
+            },
+        ].filter((item) => item.previous && item.latest && item.previous !== item.latest);
+    })();
 
     useEffect(() => {
         const loadInitialData = async () => {
@@ -312,6 +362,102 @@ export default function MaintenanceReportModal({ isOpen, onClose, onSave, initia
                 {/* Content */}
                 <div className="flex-1 overflow-y-auto p-8 space-y-12 custom-scrollbar">
                     
+                    {(initialData as any)?.conflict_status === 'needs_refresh' && (
+                        <div className="bg-amber-50 dark:bg-amber-900/20 border-2 border-amber-200 dark:border-amber-900/30 p-6 rounded-[2rem] flex items-start gap-4 animate-in slide-in-from-top-2">
+                            <div className="flex-shrink-0 mt-0.5">
+                                <svg className="w-6 h-6 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                            </div>
+                            <div>
+                                <h5 className="text-amber-800 dark:text-amber-400 text-sm font-black uppercase tracking-widest mb-1.5">外部系統資料已更新</h5>
+                                <p className="text-xs font-bold text-amber-900/70 dark:text-amber-300/80 leading-relaxed">
+                                    此工單在外部系統已有新變動（可能包含地址、聯絡人或狀態變更）。建議您在對此工單進行處理或回報前，先確認最新的現況，避免產生資訊落差。
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    {refreshDiffItems.length > 0 && (
+                        <div className="mt-[-1.5rem] rounded-[2rem] border border-amber-200/80 bg-amber-50/70 p-6 shadow-sm dark:border-amber-800/40 dark:bg-amber-950/20">
+                            <div className="mb-4 text-[10px] font-black uppercase tracking-[0.2em] text-amber-700 dark:text-amber-300">
+                                變更內容
+                            </div>
+                            <div className="space-y-3">
+                                {refreshDiffItems.map((item) => (
+                                    <div key={item.key} className="rounded-xl bg-white/80 px-4 py-3 dark:bg-zinc-950/30">
+                                        <div className="font-black text-amber-900 dark:text-amber-100">{item.label}</div>
+                                        <div className="mt-2 grid gap-2 sm:grid-cols-2 sm:gap-4">
+                                            <div>
+                                                <div className="text-[10px] font-black uppercase tracking-widest text-amber-500 dark:text-amber-300">原本</div>
+                                                <div className="mt-1 text-sm font-bold break-words text-zinc-700 dark:text-zinc-200">{item.previous}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-[10px] font-black uppercase tracking-widest text-amber-500 dark:text-amber-300">最新</div>
+                                                <div className="mt-1 text-sm font-bold break-words text-zinc-900 dark:text-zinc-50">{item.latest}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {((initialData as any)?.conflict_status === 'needs_refresh') && Boolean((initialData as any)?.latest_external_diff?.external_note) && (
+                        <div className="mt-[-1.5rem] rounded-[2rem] border border-blue-200/80 bg-blue-50/70 p-6 shadow-sm dark:border-blue-800/40 dark:bg-blue-950/20">
+                            <div className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-blue-700 dark:text-blue-300">
+                                最新外部說明
+                            </div>
+                            <div className="whitespace-pre-wrap break-words rounded-xl bg-white/80 px-4 py-4 text-sm font-bold text-zinc-800 dark:bg-zinc-950/30 dark:text-zinc-100">
+                                {(initialData as any).latest_external_diff.external_note}
+                            </div>
+                        </div>
+                    )}
+
+                    {((initialData as any)?.conflict_status === 'needs_refresh') && (
+                        ((initialData as any)?.latest_external_diff?.monitor_staff) ||
+                        ((initialData as any)?.latest_external_diff?.monitor_judgement) ||
+                        ((initialData as any)?.latest_external_diff?.repair_staff) ||
+                        ((initialData as any)?.latest_external_diff?.work_date) ||
+                        ((initialData as any)?.latest_external_diff?.complete_date)
+                    ) && (
+                        <div className="mt-[-1.5rem] rounded-[2rem] border border-zinc-200/80 bg-zinc-50/80 p-6 shadow-sm dark:border-zinc-800/40 dark:bg-zinc-950/20">
+                            <div className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 dark:text-zinc-400">
+                                最新外部欄位
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                                {((initialData as any)?.latest_external_diff?.monitor_staff) && (
+                                    <div className="rounded-xl bg-white/80 px-4 py-3 dark:bg-zinc-900/50">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400">監控人員</div>
+                                        <div className="mt-1 text-sm font-bold text-zinc-900 dark:text-zinc-100">{(initialData as any).latest_external_diff.monitor_staff}</div>
+                                    </div>
+                                )}
+                                {((initialData as any)?.latest_external_diff?.monitor_judgement) && (
+                                    <div className="rounded-xl bg-white/80 px-4 py-3 dark:bg-zinc-900/50">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400">監控判斷</div>
+                                        <div className="mt-1 text-sm font-bold text-zinc-900 dark:text-zinc-100">{(initialData as any).latest_external_diff.monitor_judgement}</div>
+                                    </div>
+                                )}
+                                {((initialData as any)?.latest_external_diff?.repair_staff) && (
+                                    <div className="rounded-xl bg-white/80 px-4 py-3 dark:bg-zinc-900/50">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400">維修人員</div>
+                                        <div className="mt-1 text-sm font-bold text-zinc-900 dark:text-zinc-100">{(initialData as any).latest_external_diff.repair_staff}</div>
+                                    </div>
+                                )}
+                                {((initialData as any)?.latest_external_diff?.work_date) && (
+                                    <div className="rounded-xl bg-white/80 px-4 py-3 dark:bg-zinc-900/50">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400">施工日期</div>
+                                        <div className="mt-1 text-sm font-bold text-zinc-900 dark:text-zinc-100">{(initialData as any).latest_external_diff.work_date}</div>
+                                    </div>
+                                )}
+                                {((initialData as any)?.latest_external_diff?.complete_date) && (
+                                    <div className="rounded-xl bg-white/80 px-4 py-3 dark:bg-zinc-900/50">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400">完工日期</div>
+                                        <div className="mt-1 text-sm font-bold text-zinc-900 dark:text-zinc-100">{(initialData as any).latest_external_diff.complete_date}</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                     {formData.workflow_state === 'returned' && (
                         <div className="bg-red-50 dark:bg-red-900/20 border-2 border-red-100 dark:border-red-900/30 p-6 rounded-[2rem]">
                             <h5 className="text-red-600 dark:text-red-400 text-xs font-black uppercase mb-2">退回原因</h5>
@@ -345,7 +491,15 @@ export default function MaintenanceReportModal({ isOpen, onClose, onSave, initia
                                                     onClick={() => selectProject(p)}
                                                     className="w-full text-left px-5 py-3.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors border-b border-zinc-50 dark:border-zinc-800 last:border-0"
                                                 >
-                                                    <div className="text-sm font-black text-zinc-900 dark:text-zinc-100">{p.name}</div>
+                                                    {(() => {
+                                                        const { title, region } = formatProjectName(p.name);
+                                                        return (
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-sm font-black text-zinc-900 dark:text-zinc-100">{title}</span>
+                                                                {region && <span className="text-[10px] font-bold bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded">{region}</span>}
+                                                            </div>
+                                                        );
+                                                    })()}
                                                     <div className="text-[10px] text-zinc-400 font-bold mt-0.5">{p.case_no} | {p.address}</div>
                                                 </button>
                                             ))}

@@ -6,6 +6,7 @@ const { createObjectCsvWriter } = require('csv-writer');
 
 const USER_DATA_DIR = path.join(process.cwd(), '.playwright-profile');
 const OUTPUT_DIR = path.join(process.cwd(), 'probe-output', 'extraction');
+const HEADLESS = process.env.OPS_HEADLESS === '1';
 
 if (!fs.existsSync(OUTPUT_DIR)) {
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -35,10 +36,49 @@ const config = {
         mapping: [
             'region', 'case_name', 'case_no', 'report_time', 'reporter', 
             'report_issue', 'monitor_staff', 'monitor_judgement', 'monitor_note', 
-            'repair_staff', 'repair_note', 'repair_status', 'work_date', 'complete_date'
+            'repair_staff', 'repair_note', 'repair_status', 'work_date', 'complete_date',
+            'cell_case', 'cell_report', 'cell_monitor', 'cell_repair', 'cell_status'
         ]
     }
 }[type];
+
+function splitCellLines(value) {
+    return String(value || '')
+        .split('\n')
+        .map(part => part.trim())
+        .filter(Boolean);
+}
+
+function parseReportRowFromCells(cells) {
+    const safeCells = Array.isArray(cells) ? cells : [];
+    const caseLines = splitCellLines(safeCells[0]);
+    const reportLines = splitCellLines(safeCells[1]);
+    const monitorLines = splitCellLines(safeCells[2]);
+    const repairLines = splitCellLines(safeCells[3]);
+    const statusLines = splitCellLines(safeCells[4]);
+
+    return {
+        region: caseLines[0] || '',
+        case_name: caseLines[1] || '',
+        case_no: caseLines[2] || '',
+        report_time: reportLines[0] || '',
+        reporter: reportLines[1] || '',
+        report_issue: reportLines.slice(2).join('\n'),
+        monitor_staff: monitorLines[0] || '',
+        monitor_judgement: monitorLines[1] || '',
+        monitor_note: monitorLines.slice(2).join('\n'),
+        repair_staff: repairLines[0] || '',
+        repair_note: repairLines.slice(1).join('\n'),
+        repair_status: statusLines[0] || '',
+        work_date: statusLines[1] || '',
+        complete_date: statusLines[2] || '',
+        cell_case: safeCells[0] || '',
+        cell_report: safeCells[1] || '',
+        cell_monitor: safeCells[2] || '',
+        cell_repair: safeCells[3] || '',
+        cell_status: safeCells[4] || '',
+    };
+}
 
 async function promptEnter(promptText) {
     const rl = readline.createInterface({
@@ -60,7 +100,7 @@ async function checkLoggedIn(page) {
 async function run() {
     console.log(`[auth] 啟動持久化瀏覽器 (${USER_DATA_DIR})...`);
     const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
-        headless: false,
+        headless: HEADLESS,
         args: ['--disable-popup-blocking', '--disable-infobars', '--window-size=1440,900']
     });
 
@@ -127,9 +167,13 @@ async function run() {
     // Normalization
     console.log('[extract-rows] 執行資料正規化...');
     const normalizedRows = allRowsRaw.map(row => {
+        if (type === 'reports') {
+            return parseReportRowFromCells(row);
+        }
+
         const obj = {};
         config.mapping.forEach((key, i) => {
-            obj[key] = row[i] || ''; 
+            obj[key] = row[i] || '';
         });
         return obj;
     });

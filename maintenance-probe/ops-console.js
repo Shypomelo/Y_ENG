@@ -7,6 +7,13 @@ const { createObjectCsvWriter } = require('csv-writer');
 const USER_DATA_DIR = path.join(process.cwd(), '.playwright-profile');
 const OUTPUT_DIR = path.join(process.cwd(), 'probe-output', 'console');
 const DEBUG_DIR = path.join(process.cwd(), 'probe-output', 'debug');
+const HEADLESS = process.env.OPS_HEADLESS === '1';
+const REMOTE_DEBUG_URL = process.env.OPS_REMOTE_DEBUG_URL || '';
+const CHROME_EXECUTABLES = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+];
+const CHROME_EXECUTABLE = CHROME_EXECUTABLES.find(file => fs.existsSync(file)) || null;
 
 [OUTPUT_DIR, DEBUG_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) {
@@ -32,12 +39,22 @@ async function initBrowser() {
             context = null;
         }
     }
+
+    if (REMOTE_DEBUG_URL) {
+        console.log(`[auth] 連線既有 Chrome CDP: ${REMOTE_DEBUG_URL}`);
+        const browser = await chromium.connectOverCDP(REMOTE_DEBUG_URL);
+        const contexts = browser.contexts();
+        context = contexts[0] || await browser.newContext();
+        page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+        return;
+    }
     
     console.log(`[auth] 啟動持久化瀏覽器實例 (${USER_DATA_DIR})...`);
     try {
         context = await chromium.launchPersistentContext(USER_DATA_DIR, {
-            headless: false,
+            headless: HEADLESS,
             viewport: null,
+            executablePath: CHROME_EXECUTABLE || undefined,
             args: ['--disable-popup-blocking', '--disable-infobars']
         });
 
@@ -201,7 +218,8 @@ async function extractData(type, filterRegion = null) {
             mapping: [
                 'region', 'case_name', 'case_no', 'report_time', 'reporter', 
                 'report_issue', 'monitor_staff', 'monitor_judgement', 'monitor_note', 
-                'repair_staff', 'repair_note', 'repair_status', 'work_date', 'complete_date'
+                'repair_staff', 'repair_note', 'repair_status', 'work_date', 'complete_date',
+                'cell_case', 'cell_report', 'cell_monitor', 'cell_repair', 'cell_status'
             ],
             rowSelector: '#reportDataList > tr'
         },
@@ -328,13 +346,15 @@ async function extractData(type, filterRegion = null) {
     // 5. 存檔與過濾
     const saveFiles = async (data, prefix) => {
         const normalized = data.map(row => {
-            const obj = {};
-            config.mapping.forEach((key, i) => {
-                obj[key] = row[i] || '';
+            const obj = type === 'reports' ? parseReportRowFromCells(row) : {};
+            if (type !== 'reports') {
+                config.mapping.forEach((key, i) => {
+                    obj[key] = row[i] || '';
                 // 額外增加通用欄位
-                if (key === 'source_page') obj[key] = config.menu;
-                if (key === 'extracted_at') obj[key] = new Date().toISOString();
-            });
+                    if (key === 'source_page') obj[key] = config.menu;
+                    if (key === 'extracted_at') obj[key] = new Date().toISOString();
+                });
+            }
             // 補齊缺失欄位
             if (!obj.source_page) obj.source_page = config.menu;
             if (!obj.extracted_at) obj.extracted_at = new Date().toISOString();
@@ -373,6 +393,381 @@ async function extractData(type, filterRegion = null) {
     }
     console.log('----------------------------------------');
     return true;
+}
+
+function splitCellLines(value) {
+    return String(value || '')
+        .split('\n')
+        .map(part => part.trim())
+        .filter(Boolean);
+}
+
+function parseReportRowFromCells(cells) {
+    const safeCells = Array.isArray(cells) ? cells : [];
+    const caseLines = splitCellLines(safeCells[0]);
+    const reportLines = splitCellLines(safeCells[1]);
+    const monitorLines = splitCellLines(safeCells[2]);
+    const repairLines = splitCellLines(safeCells[3]);
+    const statusLines = splitCellLines(safeCells[4]);
+
+    const region = caseLines[0] || '';
+    const case_name = caseLines[1] || '';
+    const case_no = caseLines[2] || '';
+
+    const report_time = reportLines[0] || '';
+    const reporter = reportLines[1] || '';
+    const report_issue = reportLines.slice(2).join('\n');
+
+    const monitor_staff = monitorLines[0] || '';
+    const monitor_judgement = monitorLines[1] || '';
+    const monitor_note = monitorLines.slice(2).join('\n');
+
+    const repair_staff = repairLines[0] || '';
+    const repair_note = repairLines.slice(1).join('\n');
+
+    const repair_status = statusLines[0] || '';
+    const work_date = statusLines[1] || '';
+    const complete_date = statusLines[2] || '';
+
+    return {
+        region,
+        case_name,
+        case_no,
+        report_time,
+        reporter,
+        report_issue,
+        monitor_staff,
+        monitor_judgement,
+        monitor_note,
+        repair_staff,
+        repair_note,
+        repair_status,
+        work_date,
+        complete_date,
+        cell_case: safeCells[0] || '',
+        cell_report: safeCells[1] || '',
+        cell_monitor: safeCells[2] || '',
+        cell_repair: safeCells[3] || '',
+        cell_status: safeCells[4] || '',
+    };
+}
+
+function getReportProbeBaseName() {
+    return path.join(DEBUG_DIR, 'reports-external-id');
+}
+
+async function installExternalIdProbe() {
+    await page.addInitScript(() => {
+        if (window.__opsExternalIdProbeInstalled) return;
+        window.__opsExternalIdProbeInstalled = true;
+
+        const maxEntries = 200;
+        const state = {
+            fetches: [],
+            xhrs: [],
+            clicks: []
+        };
+
+        const pushEntry = (bucket, entry) => {
+            bucket.push(entry);
+            if (bucket.length > maxEntries) bucket.shift();
+        };
+
+        window.__opsExternalIdProbe = state;
+
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+            const input = args[0];
+            const init = args[1] || {};
+            let url = '';
+            if (typeof input === 'string') url = input;
+            else if (input && typeof input.url === 'string') url = input.url;
+
+            pushEntry(state.fetches, {
+                ts: new Date().toISOString(),
+                url,
+                method: init.method || 'GET'
+            });
+
+            return originalFetch(...args);
+        };
+
+        const originalOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+            this.__opsProbeRequest = { method, url, ts: new Date().toISOString() };
+            return originalOpen.call(this, method, url, ...rest);
+        };
+
+        const originalSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(body) {
+            if (this.__opsProbeRequest) {
+                pushEntry(state.xhrs, {
+                    ...this.__opsProbeRequest,
+                    bodyPreview: typeof body === 'string' ? body.slice(0, 300) : ''
+                });
+            }
+            return originalSend.call(this, body);
+        };
+
+        document.addEventListener('click', (event) => {
+            const target = event.target instanceof Element ? event.target.closest('button, a, tr, [onclick]') : null;
+            if (!target) return;
+
+            pushEntry(state.clicks, {
+                ts: new Date().toISOString(),
+                tag: target.tagName,
+                id: target.id || '',
+                className: target.className || '',
+                text: (target.innerText || target.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+                onclick: target.getAttribute && target.getAttribute('onclick') || '',
+                dataset: Object.assign({}, target.dataset || {})
+            });
+        }, true);
+    });
+}
+
+async function getReportCrudFrame() {
+    await page.waitForSelector('#main-iframe', { state: 'visible', timeout: 15000 });
+
+    for (let i = 0; i < 30; i++) {
+        const frame = page.frames().find(f => f.url().includes('sg_ops.html?view=report_crud'));
+        if (frame) return frame;
+        await page.waitForTimeout(500);
+    }
+
+    throw new Error('report_crud frame not found');
+}
+
+async function waitForReportRows(frame) {
+    for (let i = 0; i < 30; i++) {
+        const count = await frame.evaluate(() => document.querySelectorAll('#reportDataList > tr').length).catch(() => 0);
+        if (count > 0) return count;
+        await page.waitForTimeout(1000);
+    }
+
+    return 0;
+}
+
+async function debugReportsExternalId() {
+    await installExternalIdProbe();
+
+    if (!(await navigateTo('通報記錄'))) return;
+
+    console.log('[debug] Inspecting report_crud for stable external id signals...');
+
+    const frame = await getReportCrudFrame();
+    const rowCount = await waitForReportRows(frame);
+
+    if (rowCount <= 0) {
+        throw new Error('report rows did not load');
+    }
+
+    const preClickSnapshot = await frame.evaluate(() => {
+        const toAttributes = (el) => Array.from(el.attributes || []).map(attr => ({
+            name: attr.name,
+            value: attr.value
+        }));
+
+        const pickIdentityCandidates = (source) => {
+            if (!source) return [];
+            const candidates = [];
+            const text = String(source);
+            const regexes = [
+                /projects\/[^'"\s)]+/g,
+                /reports?\/[^'"\s)]+/g,
+                /tickets?\/[^'"\s)]+/g,
+                /[A-Za-z0-9_-]{16,}/g
+            ];
+
+            for (const regex of regexes) {
+                const matches = text.match(regex) || [];
+                for (const match of matches) {
+                    if (!candidates.includes(match)) candidates.push(match);
+                }
+            }
+
+            return candidates.slice(0, 10);
+        };
+
+        const summarizeNode = (el) => ({
+            tag: el.tagName,
+            id: el.id || '',
+            className: el.className || '',
+            name: el.getAttribute('name') || '',
+            type: el.getAttribute('type') || '',
+            text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+            value: (el.value || el.getAttribute('value') || '').slice(0, 200),
+            onclick: el.getAttribute('onclick') || '',
+            dataset: Object.assign({}, el.dataset || {}),
+            attributes: toAttributes(el).filter(attr =>
+                attr.name.startsWith('data-') ||
+                attr.name === 'onclick' ||
+                attr.name === 'id' ||
+                attr.name === 'name' ||
+                attr.name === 'value' ||
+                attr.name === 'type'
+            )
+        });
+
+        const rows = Array.from(document.querySelectorAll('#reportDataList > tr')).map((tr, index) => {
+            const cells = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim());
+            const rowAttrs = toAttributes(tr);
+            const hiddenInputs = Array.from(tr.querySelectorAll('input[type="hidden"], input[type="text"], input[type="search"], textarea'))
+                .map(summarizeNode)
+                .filter(input => input.type === 'hidden' || input.value || input.name || input.id);
+            const actionNodes = Array.from(tr.querySelectorAll('[onclick], button, a, [data-id], [data-doc-id], [data-key], [role="button"]'))
+                .map(summarizeNode);
+
+            const candidateSources = [
+                tr.outerHTML,
+                JSON.stringify(Object.assign({}, tr.dataset || {})),
+                ...rowAttrs.map(attr => `${attr.name}=${attr.value}`),
+                ...hiddenInputs.map(input => `${input.name}:${input.value}:${input.onclick}`),
+                ...actionNodes.map(node => `${node.id}:${node.name}:${node.value}:${node.onclick}:${JSON.stringify(node.dataset)}`)
+            ];
+
+            const identityCandidates = Array.from(new Set(candidateSources.flatMap(pickIdentityCandidates)));
+
+            return {
+                index,
+                cells,
+                dataset: Object.assign({}, tr.dataset || {}),
+                attributes: rowAttrs,
+                hiddenInputs,
+                actionNodes,
+                identityCandidates,
+                outerHTMLSnippet: tr.outerHTML.slice(0, 1200)
+            };
+        });
+
+        const globalCandidates = Object.keys(window)
+            .filter(key => /report|ticket|firebase|firestore|project|crud/i.test(key))
+            .slice(0, 100)
+            .map(key => {
+                let valueType = typeof window[key];
+                let preview = '';
+                try {
+                    if (valueType === 'string') preview = window[key].slice(0, 200);
+                    else if (valueType === 'object' && window[key]) preview = JSON.stringify(window[key]).slice(0, 200);
+                    else if (valueType === 'function') preview = String(window[key]).slice(0, 200);
+                } catch (error) {
+                    preview = `[unserializable:${error.message}]`;
+                }
+
+                return { key, valueType, preview };
+            });
+
+        return {
+            href: location.href,
+            title: document.title,
+            rowCount: rows.length,
+            rows,
+            globalCandidates,
+            probeState: window.__opsExternalIdProbe || null
+        };
+    });
+
+    const firstClickable = await frame.evaluate(() => {
+        const firstRow = document.querySelector('#reportDataList > tr');
+        if (!firstRow) return { clicked: false, reason: 'no-row' };
+
+        const candidates = Array.from(firstRow.querySelectorAll('[onclick], button, a, [role="button"]'));
+        const target = candidates.find(el => /edit|detail|view|檢視|查看|編輯/i.test(
+            `${el.getAttribute('onclick') || ''} ${el.innerText || ''} ${el.className || ''}`
+        )) || candidates[0] || firstRow;
+
+        target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+        return {
+            clicked: true,
+            tag: target.tagName,
+            id: target.id || '',
+            className: target.className || '',
+            text: (target.innerText || target.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+            onclick: target.getAttribute && target.getAttribute('onclick') || '',
+            dataset: Object.assign({}, target.dataset || {})
+        };
+    }).catch(error => ({ clicked: false, reason: error.message }));
+
+    await page.waitForTimeout(2000);
+
+    const postClickSnapshot = await frame.evaluate(() => {
+        const visibleNodes = Array.from(document.querySelectorAll('dialog, [role="dialog"], .modal, .modal.show, .fixed, .swal2-container'))
+            .filter(el => {
+                const style = window.getComputedStyle(el);
+                return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') !== 0;
+            })
+            .slice(0, 10)
+            .map(el => ({
+                tag: el.tagName,
+                id: el.id || '',
+                className: el.className || '',
+                text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 500),
+                hiddenInputs: Array.from(el.querySelectorAll('input, textarea, select')).map(input => ({
+                    tag: input.tagName,
+                    id: input.id || '',
+                    name: input.getAttribute('name') || '',
+                    type: input.getAttribute('type') || '',
+                    value: (input.value || input.getAttribute('value') || '').slice(0, 300),
+                    dataset: Object.assign({}, input.dataset || {})
+                }))
+            }));
+
+        const probeState = window.__opsExternalIdProbe || { fetches: [], xhrs: [], clicks: [] };
+        const firestoreLikeRequests = [...probeState.fetches, ...probeState.xhrs].filter(entry =>
+            /firestore|googleapis|firebase|report|ticket|project/i.test(`${entry.url || ''} ${entry.bodyPreview || ''}`)
+        );
+
+        return {
+            modalCandidates: visibleNodes,
+            probeState,
+            firestoreLikeRequests
+        };
+    });
+
+    const summary = (() => {
+        const rowCandidates = preClickSnapshot.rows
+            .map(row => row.identityCandidates)
+            .filter(list => list.length > 0);
+
+        const flattened = rowCandidates.flat();
+        const uniqueCandidates = Array.from(new Set(flattened));
+        const repeatedCandidates = uniqueCandidates.filter(candidate =>
+            rowCandidates.filter(list => list.includes(candidate)).length > 1
+        );
+
+        const firestoreRequestUrls = postClickSnapshot.firestoreLikeRequests.map(entry => entry.url).filter(Boolean);
+        const hasDocumentPath = uniqueCandidates.some(candidate => candidate.includes('/')) ||
+            firestoreRequestUrls.some(url => /documents|firestore/i.test(url));
+
+        return {
+            rowCount: preClickSnapshot.rowCount,
+            rowsWithCandidates: rowCandidates.length,
+            uniqueCandidateCount: uniqueCandidates.length,
+            repeatedCandidateCount: repeatedCandidates.length,
+            hasDocumentPath,
+            likelyStable: uniqueCandidates.length > 0 && repeatedCandidates.length === 0,
+            note: uniqueCandidates.length === 0
+                ? 'No obvious row-level identifier was found in DOM attributes, hidden inputs, onclick, or captured requests.'
+                : 'Candidates found. Verify whether each row has a unique candidate that remains stable across repeated runs.'
+        };
+    })();
+
+    const result = {
+        generatedAt: new Date().toISOString(),
+        iframeSrc: await page.evaluate(() => document.querySelector('#main-iframe')?.src),
+        firstClickable,
+        summary,
+        preClickSnapshot,
+        postClickSnapshot
+    };
+
+    const baseName = getReportProbeBaseName();
+    fs.writeFileSync(`${baseName}.json`, JSON.stringify(result, null, 2));
+    await page.screenshot({ path: `${baseName}.png`, fullPage: true });
+
+    console.log(`[debug] External id probe written:\n > ${baseName}.json\n > ${baseName}.png`);
+    console.log(`[debug] Summary: ${JSON.stringify(summary)}`);
 }
 
 // --- Debug Commands ---
@@ -1429,6 +1824,7 @@ async function handleCommand(line, rl) {
                 if (arg1 === 'reports-dom') await debugReportsDom();
                 else if (arg1 === 'reports-north') await debugNorthFilter();
                 else if (arg1 === 'reports-load') await debugReportsLoad(20000);
+                else if (arg1 === 'reports-external-id') await debugReportsExternalId();
                 else if (arg1 === 'sites-dom') await debugSitesDom();
                 else if (arg1 === 'sites-visible') await debugSitesVisible();
                 else if (arg1 === 'sites-root') await debugSitesRoot();

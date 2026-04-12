@@ -1,3 +1,4 @@
+// [FRONTGROUND_DANGEROUS] - This script launches a visible browser window and requires manual interaction.
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
