@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { DailySchedule } from "../../../lib/types/database";
 import { useProjects } from "../../providers/projects-store";
 import * as actions from "../actions";
+import type { ScheduleCaseSearchItem } from "../actions";
 
 interface ScheduleModalProps {
     isOpen: boolean;
@@ -24,6 +25,7 @@ const formatLocal = (date: Date) => {
 export default function ScheduleModal({ isOpen, onClose, onSave, initialData, initialDate, mode = 'default' }: ScheduleModalProps) {
     const { peopleByDept, projects } = useProjects();
     const [loading, setLoading] = useState(false);
+    const [caseSearchOptions, setCaseSearchOptions] = useState<ScheduleCaseSearchItem[]>([]);
 
     const [caseName, setCaseName] = useState(initialData?.case_name || "");
     const [scheduleDate, setScheduleDate] = useState<string>("");
@@ -56,6 +58,25 @@ export default function ScheduleModal({ isOpen, onClose, onSave, initialData, in
             }
         };
         loadSettings();
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadCaseSearchOptions = async () => {
+            try {
+                const items = await actions.listScheduleCaseSearchAction();
+                if (!cancelled) setCaseSearchOptions(items);
+            } catch (error) {
+                console.error("Failed to load schedule case search options:", error);
+            }
+        };
+
+        loadCaseSearchOptions();
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     useEffect(() => {
@@ -98,10 +119,77 @@ export default function ScheduleModal({ isOpen, onClose, onSave, initialData, in
 
     const isOtherType = caseType === "其他";
     const timeOptions = generateTimeOptions(isOtherType);
-    const filteredProjects = projects.filter(p =>
-        p.project_name.toLowerCase().includes(projectSearch.toLowerCase()) ||
-        p.project_id.toLowerCase().includes(projectSearch.toLowerCase())
-    );
+    const normalizedSearch = projectSearch.toLowerCase().trim();
+    const filteredProjects = normalizedSearch
+        ? caseSearchOptions.filter(item =>
+            [
+                item.case_name,
+                item.case_no,
+                item.address,
+                item.region,
+                item.site_type,
+                item.source
+            ].some(value => (value || "").toLowerCase().includes(normalizedSearch))
+        )
+        : [];
+
+    const findExactCaseOption = (value: string) => {
+        const normalized = value.toLowerCase().trim();
+        if (!normalized) return null;
+        return caseSearchOptions.find(item =>
+            item.case_name.toLowerCase().trim() === normalized ||
+            (item.case_no || "").toLowerCase().trim() === normalized
+        ) || null;
+    };
+
+    const resolveProjectId = (item: ScheduleCaseSearchItem) => {
+        const matchedProject = projects.find(p =>
+            (item.project_id && p.project_id === item.project_id) ||
+            (item.case_no && p.case_no === item.case_no) ||
+            p.project_name === item.case_name
+        );
+        return matchedProject?.project_id || "";
+    };
+
+    const resolveProjectAddress = (item: ScheduleCaseSearchItem) => {
+        if (item.address) return item.address;
+        const matchedProject = projects.find(p =>
+            (item.project_id && p.project_id === item.project_id) ||
+            (item.case_no && p.case_no === item.case_no) ||
+            p.project_name === item.case_name
+        );
+        return matchedProject?.address || "";
+    };
+
+    const handleCaseInputChange = (val: string) => {
+        setProjectSearch(val);
+        setCaseName(val);
+
+        const matched = findExactCaseOption(val);
+        if (matched) {
+            setProjectId(resolveProjectId(matched));
+            const resolvedAddress = resolveProjectAddress(matched);
+            if (resolvedAddress) setAddress(resolvedAddress);
+            return;
+        }
+
+        const matchedProject = projects.find(p =>
+            p.project_name === val ||
+            (p.case_no || "").toLowerCase() === val.toLowerCase().trim()
+        );
+        setProjectId(matchedProject?.project_id || "");
+        if (matchedProject?.address) setAddress(matchedProject.address);
+    };
+
+    const handleCaseOptionSelect = (item: ScheduleCaseSearchItem) => {
+        setProjectId(resolveProjectId(item));
+        setProjectSearch(item.case_name || "");
+        setCaseName(item.case_name || "");
+        const resolvedAddress = resolveProjectAddress(item);
+        if (resolvedAddress) setAddress(resolvedAddress);
+    };
+
+    const shouldShowCaseOptions = normalizedSearch.length > 0 && filteredProjects.length > 0;
 
     const formData: Partial<DailySchedule> = {
         case_name: caseName || "",
@@ -179,38 +267,24 @@ export default function ScheduleModal({ isOpen, onClose, onSave, initialData, in
                                 <input
                                     type="text"
                                     value={projectSearch || caseName}
-                                    onChange={(e) => {
-                                        const val = e.target.value;
-                                        setProjectSearch(val);
-                                        setCaseName(val);
-                                        const matched = projects.find(p => p.project_name === val);
-                                        if (matched) {
-                                            setProjectId(matched.project_id);
-                                            if (matched.address) setAddress(matched.address);
-                                            // Handle notes/description if possible (here we assume if description is empty, use project info)
-                                        } else {
-                                            setProjectId("");
-                                        }
-                                    }}
+                                    onChange={(e) => handleCaseInputChange(e.target.value)}
                                     placeholder="搜尋案場或手動輸入..."
                                     className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
                                 />
-                                {projectSearch && !projectId && filteredProjects.length > 0 && (
+                                {shouldShowCaseOptions && (
                                     <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg bg-white shadow-xl ring-1 ring-black/5 dark:bg-zinc-800 no-scrollbar">
                                         {filteredProjects.map(p => (
                                             <button
-                                                key={p.project_id}
-                                                onClick={() => {
-                                                    setProjectId(p.project_id);
-                                                    setProjectSearch(p.project_name);
-                                                    setCaseName(p.project_name);
-                                                    if (p.address) setAddress(p.address);
-                                                    // Auto-fill Item if missing
-                                                    if (!caseType) setCaseType("進場");
-                                                }}
+                                                key={p.id}
+                                                onClick={() => handleCaseOptionSelect(p)}
                                                 className="w-full px-4 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 font-medium"
                                             >
-                                                {p.project_name}
+                                                <div className="flex flex-col items-start gap-0.5">
+                                                    <span>{p.case_name}</span>
+                                                    <span className="text-[10px] font-mono text-zinc-400">
+                                                        {[p.case_no, p.region, p.site_type].filter(Boolean).join(" · ")}
+                                                    </span>
+                                                </div>
                                             </button>
                                         ))}
                                     </div>

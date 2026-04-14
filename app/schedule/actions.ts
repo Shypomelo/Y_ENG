@@ -1,8 +1,11 @@
 "use server";
 
+import fs from "fs/promises";
+import path from "path";
 import { revalidatePath } from "next/cache";
 
 import * as scheduleRepo from "../../lib/repositories/schedules";
+import * as projectsRepo from "../../lib/repositories/projects";
 import * as todoRepo from "../../lib/repositories/todos";
 import * as settingsRepo from "../../lib/repositories/settings";
 import { DailySchedule, TodoItem } from "../../lib/types/database";
@@ -13,6 +16,91 @@ import {
     hasGoogleCredentials,
     testGoogleConnection
 } from "../../lib/google-calendar";
+
+export type ScheduleCaseSearchItem = {
+    id: string;
+    project_id?: string | null;
+    case_no?: string | null;
+    case_name: string;
+    address?: string | null;
+    region?: string | null;
+    site_type?: string | null;
+    source: "projects" | "north-sites";
+};
+
+const normalizeSearchText = (value: string) =>
+    value
+        .toLowerCase()
+        .normalize("NFKC")
+        .replace(/\s+/g, "")
+        .trim();
+
+async function readRawCaseSearchItems(): Promise<ScheduleCaseSearchItem[]> {
+    const rawPath = path.join(
+        process.cwd(),
+        "maintenance-probe",
+        "probe-output",
+        "console",
+        "north-sites-master.json"
+    );
+
+    try {
+        const content = await fs.readFile(rawPath, "utf-8");
+        const parsed = JSON.parse(content);
+        const rows = Array.isArray(parsed?.data) ? parsed.data : [];
+
+        return rows.map((row: any, index: number) => ({
+            id: `north-sites:${row.case_no || index}`,
+            case_no: row.case_no || null,
+            case_name: row.case_name || "",
+            address: row.address || null,
+            region: row.region || null,
+            site_type: row.site_type || null,
+            source: "north-sites"
+        })).filter((item: { case_name: string }) => item.case_name);
+    } catch (error: any) {
+        console.error("readRawCaseSearchItems Error:", error?.message || error);
+        return [];
+    }
+}
+
+export async function listScheduleCaseSearchAction(): Promise<ScheduleCaseSearchItem[]> {
+    const [dbProjects, rawSites] = await Promise.all([
+        projectsRepo.listProjects(),
+        readRawCaseSearchItems()
+    ]);
+
+    const merged = new Map<string, ScheduleCaseSearchItem>();
+
+    for (const project of dbProjects) {
+        const item: ScheduleCaseSearchItem = {
+            id: `project:${project.id}`,
+            project_id: project.id,
+            case_no: project.case_no || null,
+            case_name: project.name || "",
+            address: project.address || null,
+            source: "projects"
+        };
+
+        const key = normalizeSearchText(item.case_no || item.case_name);
+        if (item.case_name && !merged.has(key)) {
+            merged.set(key, item);
+        }
+    }
+
+    for (const site of rawSites) {
+        const key = normalizeSearchText(site.case_no || site.case_name);
+        if (!merged.has(key)) {
+            merged.set(key, site);
+        }
+    }
+
+    return Array.from(merged.values()).sort((a, b) => {
+        const nameCompare = a.case_name.localeCompare(b.case_name, "zh-Hant", { numeric: true, sensitivity: "base" });
+        if (nameCompare !== 0) return nameCompare;
+        return (a.case_no || "").localeCompare(b.case_no || "", "zh-Hant", { numeric: true, sensitivity: "base" });
+    });
+}
 
 // Schedule Actions
 export async function getSchedulesAction(startDate: string, endDate: string) {
@@ -27,6 +115,17 @@ export async function getSchedulesAction(startDate: string, endDate: string) {
 export async function createScheduleAction(schedule: Omit<DailySchedule, 'id' | 'created_at' | 'updated_at'>) {
     if (!schedule.schedule_date || schedule.schedule_date === "") {
         schedule.schedule_date = '1970-01-01';
+    }
+
+    // Ensure mandatory field case_name is never null or undefined
+    if (!schedule.case_name) {
+        console.warn("[ScheduleActions] createScheduleAction received null/empty case_name. Providing fallback.");
+        schedule.case_name = '從 Google 匯入 (未命名)';
+    }
+    
+    // Ensure status is never null for internal adoption
+    if (!schedule.status) {
+        schedule.status = 'pending_claim';
     }
 
     // 1. Create in Database
@@ -45,7 +144,7 @@ export async function createScheduleAction(schedule: Omit<DailySchedule, 'id' | 
             end_datetime: schedule.end_datetime || `${schedule.schedule_date}T${endTimeStr.substring(0, 5)}:00+08:00`,
             is_all_day: schedule.is_all_day || false
         };
-        const syncRes = await syncEventToGoogle(res.id, payload);
+        const syncRes = await syncEventToGoogle(res.id, payload, schedule.google_event_id || undefined);
         console.log(`[ScheduleActions] Create sync for ID ${res.id} result:`, syncRes.success ? "✅ Success" : "❌ Failed", syncRes.googleEventId || "");
         
         if (syncRes.success && syncRes.googleEventId) {
@@ -95,14 +194,20 @@ export async function updateScheduleAction(id: string, updates: Partial<DailySch
                 targetId = currentMapping.id;
             } else {
                 // Not in DB yet? This is an ADOPTION.
-                // We create a new record instead of updating a non-existent UUID.
+                console.log(`[ScheduleActions] Adopting virtual/Google event: ${googleEventId}`, updates);
+                
+                // Ensure we have mandatory fields or fallbacks
                 const newSchedule = {
                     ...updates,
                     google_event_id: googleEventId,
-                    source: 'internal', // It's now internal
-                    sync_status: 'synced'
+                    case_name: updates.case_name || (updates as any).title || '從 Google 匯入 (未命名)',
+                    source: 'internal',
+                    sync_status: 'synced',
+                    status: updates.status || 'pending_claim'
                 } as any;
+                
                 const created = await createScheduleAction(newSchedule);
+                console.log(`[ScheduleActions] Adoption complete for: ${googleEventId} -> Internal ID: ${created.id}`);
                 revalidatePath('/schedule');
                 return created;
             }
