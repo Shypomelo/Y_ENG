@@ -205,16 +205,48 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
 
     const allStaff = Object.values(peopleByDept).flat();
 
-    const buildGoogleReadonlyUpdates = (schedule: DailySchedule, targetDate: string): Partial<DailySchedule> => ({
+    const buildGoogleReadonlyUpdates = (
+        schedule: DailySchedule,
+        targetDate: string,
+        existingInternal?: DailySchedule | null
+    ): Partial<DailySchedule> => ({
         schedule_date: targetDate,
-        start_time: schedule.start_time ? `${schedule.start_time.slice(0, 5)}:00` : null,
-        end_time: schedule.end_time ? `${schedule.end_time.slice(0, 5)}:00` : null,
-        is_all_day: schedule.is_all_day ?? false,
+        start_time: schedule.is_all_day
+            ? null
+            : (schedule.start_time ? `${schedule.start_time.slice(0, 5)}:00` : (existingInternal?.start_time || null)),
+        end_time: schedule.is_all_day
+            ? null
+            : (schedule.end_time ? `${schedule.end_time.slice(0, 5)}:00` : (existingInternal?.end_time || null)),
+        start_datetime: schedule.start_datetime ?? existingInternal?.start_datetime ?? null,
+        end_datetime: schedule.end_datetime ?? existingInternal?.end_datetime ?? null,
+        is_all_day: schedule.is_all_day ?? existingInternal?.is_all_day ?? false,
         case_name: schedule.case_name || schedule.title || '從 Google 匯入',
         address: schedule.address || null,
         description: schedule.description || null,
         case_type: schedule.case_type || '其他',
         status: schedule.status && schedule.status !== 'application' ? schedule.status : 'pending_claim',
+    });
+
+    const buildGoogleReadonlyAdoptionPayload = (
+        schedule: DailySchedule,
+        targetDate: string,
+        existingInternal?: DailySchedule | null
+    ): Partial<DailySchedule> => ({
+        schedule_date: targetDate,
+        start_time: schedule.is_all_day
+            ? null
+            : (schedule.start_time ? `${schedule.start_time.slice(0, 5)}:00` : (existingInternal?.start_time || null)),
+        end_time: schedule.is_all_day
+            ? null
+            : (schedule.end_time ? `${schedule.end_time.slice(0, 5)}:00` : (existingInternal?.end_time || null)),
+        start_datetime: schedule.start_datetime ?? existingInternal?.start_datetime ?? null,
+        end_datetime: schedule.end_datetime ?? existingInternal?.end_datetime ?? null,
+        is_all_day: schedule.is_all_day ?? existingInternal?.is_all_day ?? false,
+        case_name: schedule.case_name || schedule.title || existingInternal?.case_name || '敺?Google ?臬',
+        address: schedule.address ?? existingInternal?.address ?? null,
+        description: schedule.description ?? existingInternal?.description ?? null,
+        case_type: existingInternal?.case_type ?? schedule.case_type ?? null,
+        status: existingInternal?.status ?? (schedule.status && schedule.status !== 'application' ? schedule.status : 'pending_claim'),
     });
 
     const hasGoogleScheduleTimingDrift = (internal: DailySchedule, overlay: DailySchedule) => {
@@ -255,6 +287,14 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
         );
     }, [normalizedSchedules]);
 
+    const internalSchedulesByGoogleEventId = useMemo(() => {
+        return new Map(
+            schedules
+                .filter(s => s.source !== 'google_readonly' && s.google_event_id)
+                .map(s => [s.google_event_id!, s] as const)
+        );
+    }, [schedules]);
+
     const getSchedulesForDay = (date: Date) => {
         const dateStr = formatLocalDate(date);
         const daySchedules = normalizedSchedules
@@ -279,17 +319,20 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
 
     const moveScheduleToDate = async (schedule: DailySchedule, targetDate: string) => {
         if (schedule.source === 'google_readonly') {
-            const existingInternal = normalizedSchedules.find(
-                (item) => item.source !== 'google_readonly' && item.google_event_id === schedule.google_event_id
-            );
+            const existingInternal = schedule.google_event_id
+                ? (internalSchedulesByGoogleEventId.get(schedule.google_event_id) || null)
+                : null;
 
             if (existingInternal) {
-                await actions.updateScheduleAction(existingInternal.id, buildGoogleReadonlyUpdates(schedule, targetDate));
+                await actions.updateScheduleAction(
+                    existingInternal.id,
+                    buildGoogleReadonlyAdoptionPayload(schedule, targetDate, existingInternal)
+                );
                 return;
             }
 
             await actions.createScheduleAction({
-                ...buildGoogleReadonlyUpdates(schedule, targetDate),
+                ...buildGoogleReadonlyAdoptionPayload(schedule, targetDate),
                 google_event_id: schedule.google_event_id,
                 sync_status: 'synced'
             } as any);

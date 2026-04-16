@@ -80,14 +80,13 @@ export default function SchedulePage() {
             const end = new Date();
             end.setMonth(end.getMonth() + 6);
 
-            const [internalData, googleData] = await Promise.all([
-                actions.getSchedulesAction(formatLocal(start), formatLocal(end)),
-                actions.fetchGoogleOverlayAction(start.toISOString(), end.toISOString()).catch(e => {
-                    console.error("Failed to fetch Google overlay", e);
-                    return [];
-                })
-            ]);
-            setDbSchedules([...internalData, ...googleData]);
+            const mergedData = await actions.getScheduleViewDataAction(
+                formatLocal(start),
+                formatLocal(end),
+                start.toISOString(),
+                end.toISOString()
+            );
+            setDbSchedules(mergedData);
         } catch (error: any) {
             console.error("Failed to fetch schedules", error);
             alert(`讀取排程失敗：\n${error.message}`);

@@ -300,6 +300,31 @@ export async function deleteScheduleAction(id: string) {
     }
 }
 
+const normalizeGoogleOverlayTime = (value?: string | null) => {
+    if (!value) return null;
+    return `${value.slice(0, 5)}:00`;
+};
+
+const hasGoogleOverlayTimingDrift = (internal: DailySchedule, overlay: DailySchedule) => {
+    return (
+        (internal.schedule_date || null) !== (overlay.schedule_date || null) ||
+        (internal.start_time || null) !== normalizeGoogleOverlayTime(overlay.start_time) ||
+        (internal.end_time || null) !== normalizeGoogleOverlayTime(overlay.end_time) ||
+        Boolean(internal.is_all_day) !== Boolean(overlay.is_all_day)
+    );
+};
+
+const buildGoogleOverlayTimingUpdates = (overlay: DailySchedule): Partial<DailySchedule> => ({
+    schedule_date: overlay.schedule_date || '1970-01-01',
+    start_time: overlay.is_all_day ? null : normalizeGoogleOverlayTime(overlay.start_time),
+    end_time: overlay.is_all_day ? null : normalizeGoogleOverlayTime(overlay.end_time),
+    start_datetime: overlay.start_datetime || null,
+    end_datetime: overlay.end_datetime || null,
+    is_all_day: overlay.is_all_day ?? false,
+    sync_status: 'synced',
+    last_synced_at: new Date().toISOString()
+});
+
 export async function fetchGoogleOverlayAction(timeMin: string, timeMax: string) {
     if (!hasGoogleCredentials()) return [];
     const res = await fetchExternalEvents(timeMin, timeMax);
@@ -327,6 +352,64 @@ export async function fetchGoogleOverlayAction(timeMin: string, timeMax: string)
             google_event_id: item.id,
         } as unknown as DailySchedule;
     });
+}
+
+export async function getScheduleViewDataAction(startDate: string, endDate: string, timeMin: string, timeMax: string) {
+    const [internalData, googleOverlay] = await Promise.all([
+        scheduleRepo.listSchedules(startDate, endDate),
+        fetchGoogleOverlayAction(timeMin, timeMax).catch((error) => {
+            console.error("getScheduleViewDataAction Google overlay failed:", error?.message || error);
+            return [];
+        })
+    ]);
+
+    if (!googleOverlay.length) {
+        return internalData;
+    }
+
+    const allInternalSchedules = await scheduleRepo.listSchedules('1970-01-01', '2100-01-01');
+    const internalByGoogleId = new Map(
+        allInternalSchedules
+            .filter((item) => item.source !== 'google_readonly' && item.google_event_id)
+            .map((item) => [item.google_event_id!, item] as const)
+    );
+
+    const updateTargets = googleOverlay
+        .map((overlay) => {
+            const googleEventId = overlay.google_event_id;
+            const existingInternal = googleEventId ? internalByGoogleId.get(googleEventId) : null;
+            if (!existingInternal) {
+                return null;
+            }
+
+            if (!hasGoogleOverlayTimingDrift(existingInternal, overlay)) {
+                return null;
+            }
+
+            return {
+                id: existingInternal.id,
+                updates: buildGoogleOverlayTimingUpdates(overlay)
+            };
+        })
+        .filter((item): item is { id: string; updates: Partial<DailySchedule> } => Boolean(item));
+
+    if (updateTargets.length > 0) {
+        await Promise.all(
+            updateTargets.map((item) => scheduleRepo.updateSchedule(item.id, item.updates))
+        );
+        revalidatePath('/schedule');
+    }
+
+    const refreshedInternalData = updateTargets.length > 0
+        ? await scheduleRepo.listSchedules(startDate, endDate)
+        : internalData;
+
+    const mappedGoogleEventIds = new Set(internalByGoogleId.keys());
+    const unmatchedGoogleOverlay = googleOverlay.filter(
+        (item) => !item.google_event_id || !mappedGoogleEventIds.has(item.google_event_id)
+    );
+
+    return [...refreshedInternalData, ...unmatchedGoogleOverlay];
 }
 
 export async function testGoogleSyncAction() {
