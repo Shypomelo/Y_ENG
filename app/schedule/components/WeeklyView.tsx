@@ -205,17 +205,43 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
 
     const allStaff = Object.values(peopleByDept).flat();
 
-    // Normalize schedules: filter out google readonly duplicates if internal mapped exists
+    const buildGoogleReadonlyUpdates = (schedule: DailySchedule, targetDate: string): Partial<DailySchedule> => ({
+        schedule_date: targetDate,
+        start_time: schedule.start_time ? `${schedule.start_time.slice(0, 5)}:00` : null,
+        end_time: schedule.end_time ? `${schedule.end_time.slice(0, 5)}:00` : null,
+        is_all_day: schedule.is_all_day ?? false,
+        case_name: schedule.case_name || schedule.title || '從 Google 匯入',
+        address: schedule.address || null,
+        description: schedule.description || null,
+        case_type: schedule.case_type || '其他',
+        status: schedule.status && schedule.status !== 'application' ? schedule.status : 'pending_claim',
+    });
+
+    const hasGoogleScheduleTimingDrift = (internal: DailySchedule, overlay: DailySchedule) => {
+        const normalizeTime = (value?: string | null) => (value ? value.slice(0, 5) : null);
+
+        return (
+            (internal.schedule_date || null) !== (overlay.schedule_date || null) ||
+            normalizeTime(internal.start_time) !== normalizeTime(overlay.start_time) ||
+            normalizeTime(internal.end_time) !== normalizeTime(overlay.end_time) ||
+            Boolean(internal.is_all_day) !== Boolean(overlay.is_all_day)
+        );
+    };
+
+    // Normalize schedules: filter out google readonly duplicates only when internal timing already matches
     const normalizedSchedules = useMemo(() => {
-        const internalGoogleIds = new Set(
+        const internalByGoogleId = new Map(
             schedules
                 .filter(s => s.source !== 'google_readonly' && s.google_event_id)
-                .map(s => s.google_event_id)
+                .map(s => [s.google_event_id!, s] as const)
         );
 
         return schedules.filter(s => {
-            if (s.source === 'google_readonly' && s.google_event_id && internalGoogleIds.has(s.google_event_id)) {
-                return false;
+            if (s.source === 'google_readonly' && s.google_event_id) {
+                const mappedInternal = internalByGoogleId.get(s.google_event_id);
+                if (mappedInternal && !hasGoogleScheduleTimingDrift(mappedInternal, s)) {
+                    return false;
+                }
             }
             return true;
         });
@@ -258,19 +284,12 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
             );
 
             if (existingInternal) {
-                await actions.updateScheduleAction(existingInternal.id, { schedule_date: targetDate });
+                await actions.updateScheduleAction(existingInternal.id, buildGoogleReadonlyUpdates(schedule, targetDate));
                 return;
             }
 
             await actions.createScheduleAction({
-                case_name: schedule.case_name || schedule.title || '從 Google 匯入',
-                schedule_date: targetDate,
-                start_time: schedule.start_time ? `${schedule.start_time}:00` : null,
-                end_time: schedule.end_time ? `${schedule.end_time}:00` : null,
-                address: schedule.address || null,
-                description: schedule.description || null,
-                status: schedule.status && schedule.status !== 'application' ? schedule.status : 'pending_claim',
-                case_type: schedule.case_type || '其他',
+                ...buildGoogleReadonlyUpdates(schedule, targetDate),
                 google_event_id: schedule.google_event_id,
                 sync_status: 'synced'
             } as any);
