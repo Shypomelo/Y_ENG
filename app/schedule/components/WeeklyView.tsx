@@ -251,6 +251,35 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
         });
     };
 
+    const moveScheduleToDate = async (schedule: DailySchedule, targetDate: string) => {
+        if (schedule.source === 'google_readonly') {
+            const existingInternal = normalizedSchedules.find(
+                (item) => item.source !== 'google_readonly' && item.google_event_id === schedule.google_event_id
+            );
+
+            if (existingInternal) {
+                await actions.updateScheduleAction(existingInternal.id, { schedule_date: targetDate });
+                return;
+            }
+
+            await actions.createScheduleAction({
+                case_name: schedule.case_name || schedule.title || '從 Google 匯入',
+                schedule_date: targetDate,
+                start_time: schedule.start_time ? `${schedule.start_time}:00` : null,
+                end_time: schedule.end_time ? `${schedule.end_time}:00` : null,
+                address: schedule.address || null,
+                description: schedule.description || null,
+                status: schedule.status && schedule.status !== 'application' ? schedule.status : 'pending_claim',
+                case_type: schedule.case_type || '其他',
+                google_event_id: schedule.google_event_id,
+                sync_status: 'synced'
+            } as any);
+            return;
+        }
+
+        await actions.updateScheduleAction(schedule.id, { schedule_date: targetDate });
+    };
+
     const formatDate = (date: Date) => {
         const months = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
         return `${date.getFullYear()}年 ${months[date.getMonth()]}`;
@@ -593,6 +622,12 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
                                                     console.log("[WeeklyView] Drop Schedule", schedule.id, "to", dateSimple);
                                                     try {
                                                         // Important: Pass relevant info for Google Adoption if first move
+                                                        if (schedule.source === 'google_readonly') {
+                                                            await moveScheduleToDate(schedule, dateSimple);
+                                                            refreshSchedules();
+                                                            return;
+                                                        }
+
                                                         const updates: any = { schedule_date: dateSimple };
                                                         if (schedule.source === 'google_readonly') {
                                                             updates.case_name = schedule.case_name || schedule.title;
@@ -675,6 +710,12 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
                                                     const schedule = JSON.parse(scheduleStr);
                                                     console.log("[MonthView] Drop Schedule", schedule.id, "to", dateStr);
                                                     try {
+                                                        if (schedule.source === 'google_readonly') {
+                                                            await moveScheduleToDate(schedule, dateStr);
+                                                            refreshSchedules();
+                                                            return;
+                                                        }
+
                                                         const updates: any = { schedule_date: dateStr };
                                                         if (schedule.source === 'google_readonly') {
                                                             updates.case_name = schedule.case_name || schedule.title;
