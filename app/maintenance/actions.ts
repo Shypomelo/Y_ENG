@@ -15,6 +15,10 @@ import {
     SOURCE_SYSTEM,
 } from "../../lib/maintenance/external-ticket-normalizer";
 import { mergeExternalTicketsForUpsert } from "../../lib/maintenance/external-ticket-merge";
+import {
+    type FirestoreRepairNoteWriteInput,
+    writeFirestoreRepairNote,
+} from "../../lib/maintenance/firestore-repair-note";
 
 const BROWSER_FULL_BASELINE_PATH = path.join(
     process.cwd(),
@@ -78,6 +82,22 @@ type PendingTicketView = {
     external_note: string;
     source: string;
     source_of_truth: "external";
+};
+
+export type FirestoreRepairNoteTarget = {
+    projectId: string | null;
+    reportId: string | null;
+    docPath: string | null;
+    available: boolean;
+};
+
+type FirestoreRepairNoteSnapshotRow = {
+    case_name?: string;
+    case_no?: string;
+    report_time?: string;
+    report_issue?: string;
+    source_projectDocId?: string;
+    source_logDocId?: string;
 };
 
 export type MaintenanceNorthSyncStatus = {
@@ -431,6 +451,143 @@ function matchLatestReport(
     );
 }
 
+function extractNestedObject(value: unknown, key: string) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+    }
+
+    const nested = (value as Record<string, unknown>)[key];
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+        return null;
+    }
+
+    return nested as Record<string, unknown>;
+}
+
+function buildFirestoreRepairNoteTarget(projectId: string | null, reportId: string | null): FirestoreRepairNoteTarget {
+    return {
+        projectId,
+        reportId,
+        docPath: projectId && reportId ? `operations/${projectId}/logs/${reportId}` : null,
+        available: Boolean(projectId && reportId),
+    };
+}
+
+function normalizeRepairNoteTargetText(value: unknown) {
+    return typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLowerCase() : "";
+}
+
+function formatIsoToBrowserReportTime(value: string | null) {
+    if (!value) {
+        return null;
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    const formatter = new Intl.DateTimeFormat("zh-TW", {
+        timeZone: "Asia/Taipei",
+        year: "numeric",
+        month: "numeric",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hourCycle: "h23",
+    });
+    const parts = formatter.formatToParts(date);
+    const getPart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+
+    return `${getPart("year")}/${getPart("month")}/${getPart("day")} ${getPart("hour")}:${getPart("minute")}`;
+}
+
+function resolveFirestoreRepairNoteTargetFromSnapshot(input: {
+    caseNo: string | null;
+    caseName: string | null;
+    reportTime: string | null;
+    reportIssue: string | null;
+}): FirestoreRepairNoteTarget {
+    const caseNo = normalizeRepairNoteTargetText(input.caseNo);
+    const caseName = normalizeRepairNoteTargetText(input.caseName);
+    const reportTime = normalizeRepairNoteTargetText(input.reportTime);
+    const reportIssue = normalizeRepairNoteTargetText(input.reportIssue);
+
+    if (!caseNo || !caseName || !reportTime) {
+        return buildFirestoreRepairNoteTarget(null, null);
+    }
+
+    const snapshotRows = readProbeJson(FIRESTORE_SNAPSHOT_SOURCE_PATH) as FirestoreRepairNoteSnapshotRow[];
+    const byCoreKey = snapshotRows.filter((row) => {
+        return (
+            normalizeRepairNoteTargetText(row.case_no) === caseNo &&
+            normalizeRepairNoteTargetText(row.case_name) === caseName &&
+            normalizeRepairNoteTargetText(row.report_time) === reportTime
+        );
+    });
+
+    const matches = reportIssue
+        ? byCoreKey.filter((row) => normalizeRepairNoteTargetText(row.report_issue) === reportIssue)
+        : byCoreKey;
+
+    if (matches.length !== 1) {
+        return buildFirestoreRepairNoteTarget(null, null);
+    }
+
+    const matched = matches[0];
+    const projectId =
+        typeof matched.source_projectDocId === "string" && matched.source_projectDocId.trim()
+            ? matched.source_projectDocId.trim()
+            : null;
+    const reportId =
+        typeof matched.source_logDocId === "string" && matched.source_logDocId.trim()
+            ? matched.source_logDocId.trim()
+            : null;
+
+    return buildFirestoreRepairNoteTarget(projectId, reportId);
+}
+
+function extractFirestoreRepairNoteTarget(input: {
+    sourcePayload: unknown;
+    sourceCaseNo?: string | null;
+    sourceCaseName?: string | null;
+    sourceReportTime?: string | null;
+}): FirestoreRepairNoteTarget {
+    const rawPayload = extractNestedObject(input.sourcePayload, "raw");
+    const parsedPayload = extractNestedObject(input.sourcePayload, "parsed");
+    const projectId =
+        typeof rawPayload?.source_projectDocId === "string" && rawPayload.source_projectDocId.trim()
+            ? rawPayload.source_projectDocId.trim()
+            : null;
+    const reportId =
+        typeof rawPayload?.source_logDocId === "string" && rawPayload.source_logDocId.trim()
+            ? rawPayload.source_logDocId.trim()
+            : null;
+
+    if (projectId && reportId) {
+        return buildFirestoreRepairNoteTarget(projectId, reportId);
+    }
+
+    return resolveFirestoreRepairNoteTargetFromSnapshot({
+        caseNo:
+            (typeof rawPayload?.case_no === "string" && rawPayload.case_no.trim()) ||
+            input.sourceCaseNo ||
+            null,
+        caseName:
+            (typeof rawPayload?.case_name === "string" && rawPayload.case_name.trim()) ||
+            input.sourceCaseName ||
+            null,
+        reportTime:
+            (typeof rawPayload?.report_time === "string" && rawPayload.report_time.trim()) ||
+            (typeof parsedPayload?.source_report_time_raw === "string" && parsedPayload.source_report_time_raw.trim()) ||
+            formatIsoToBrowserReportTime(input.sourceReportTime ?? null),
+        reportIssue:
+            (typeof rawPayload?.report_issue === "string" && rawPayload.report_issue.trim()) ||
+            (typeof parsedPayload?.source_report_issue === "string" && parsedPayload.source_report_issue.trim()) ||
+            null,
+    });
+}
+
 function mapExternalTicketToPendingView(
     ticket: {
         id: string;
@@ -700,6 +857,44 @@ export async function updateMaintenanceReportAction(id: string, updates: Partial
 
     safeRevalidateMaintenance();
     return data;
+}
+
+export async function updateFirestoreRepairNoteAction(input: FirestoreRepairNoteWriteInput) {
+    const result = await writeFirestoreRepairNote(input);
+    safeRevalidateMaintenance();
+    return result;
+}
+
+export async function getFirestoreRepairNoteTargetAction(
+    externalTicketId: string,
+): Promise<FirestoreRepairNoteTarget> {
+    const ticketId = externalTicketId.trim();
+    if (!ticketId) {
+        return {
+            projectId: null,
+            reportId: null,
+            docPath: null,
+            available: false,
+        };
+    }
+
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+        .from("external_maintenance_tickets")
+        .select("source_payload,source_case_no,source_case_name,source_report_time")
+        .eq("id", ticketId)
+        .maybeSingle();
+
+    if (error) {
+        throw error;
+    }
+
+    return extractFirestoreRepairNoteTarget({
+        sourcePayload: data?.source_payload ?? null,
+        sourceCaseNo: data?.source_case_no ?? null,
+        sourceCaseName: data?.source_case_name ?? null,
+        sourceReportTime: data?.source_report_time ?? null,
+    });
 }
 
 export async function submitForReconciliationAction(reportId: string, updates?: Partial<MaintenanceReport>) {
