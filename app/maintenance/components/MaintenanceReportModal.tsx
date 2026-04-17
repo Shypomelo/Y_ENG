@@ -35,7 +35,7 @@ interface TreatmentItem {
 interface MaintenanceReportModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSave: () => void;
+    onSave: () => void | Promise<void>;
     initialData?: Partial<MaintenanceReport> & {
         ticket_id?: string;
         conflict_status?: string | null;
@@ -53,6 +53,23 @@ interface MaintenanceReportModalProps {
         } | null;
     };
 }
+
+type FirestoreRepairNoteWriteFeedback = {
+    kind: "success" | "error";
+    message: string;
+    beforeRepairNote?: string;
+    afterRepairNote?: string;
+    beforeAfterSame?: boolean;
+    readBackConsistent?: boolean;
+    verifiedAt?: string;
+};
+
+const EMPTY_FIRESTORE_TARGET: actions.FirestoreRepairNoteTarget = {
+    projectId: null,
+    reportId: null,
+    docPath: null,
+    available: false,
+};
 
 export default function MaintenanceReportModal({ isOpen, onClose, onSave, initialData }: MaintenanceReportModalProps) {
     const { peopleByDept } = useProjects();
@@ -86,6 +103,12 @@ export default function MaintenanceReportModal({ isOpen, onClose, onSave, initia
 
     const [inventory, setInventory] = useState<any[]>([]);
     const [isSaving, setIsSaving] = useState(false);
+    const [isWritingRepairNote, setIsWritingRepairNote] = useState(false);
+    const [isLoadingFirestoreTarget, setIsLoadingFirestoreTarget] = useState(false);
+    const [firestoreTarget, setFirestoreTarget] =
+        useState<actions.FirestoreRepairNoteTarget>(EMPTY_FIRESTORE_TARGET);
+    const [firestoreWriteFeedback, setFirestoreWriteFeedback] =
+        useState<FirestoreRepairNoteWriteFeedback | null>(null);
 
     const refreshDiffItems = (() => {
         const latest = (initialData as any)?.latest_external_diff;
@@ -205,7 +228,61 @@ export default function MaintenanceReportModal({ isOpen, onClose, onSave, initia
         }
     }, [initialData, isOpen]);
 
+    useEffect(() => {
+        if (!isOpen) {
+            setFirestoreTarget(EMPTY_FIRESTORE_TARGET);
+            setFirestoreWriteFeedback(null);
+            setIsLoadingFirestoreTarget(false);
+            return;
+        }
+
+        setFirestoreWriteFeedback(null);
+        const externalTicketId =
+            typeof (initialData as any)?.external_ticket_id === "string"
+                ? (initialData as any).external_ticket_id.trim()
+                : "";
+
+        if (!externalTicketId) {
+            setFirestoreTarget(EMPTY_FIRESTORE_TARGET);
+            setIsLoadingFirestoreTarget(false);
+            return;
+        }
+
+        let cancelled = false;
+        setIsLoadingFirestoreTarget(true);
+
+        void actions
+            .getFirestoreRepairNoteTargetAction(externalTicketId)
+            .then((target) => {
+                if (!cancelled) {
+                    setFirestoreTarget(target);
+                }
+            })
+            .catch((error) => {
+                console.error("Failed to resolve Firestore repairNote target", error);
+                if (!cancelled) {
+                    setFirestoreTarget(EMPTY_FIRESTORE_TARGET);
+                    setFirestoreWriteFeedback({
+                        kind: "error",
+                        message: "Failed to resolve Firestore repairNote target.",
+                    });
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setIsLoadingFirestoreTarget(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [initialData, isOpen]);
+
     if (!isOpen) return null;
+
+    const canWriteFirestoreRepairNote =
+        Boolean(firestoreTarget.projectId && firestoreTarget.reportId) && !isLoadingFirestoreTarget;
 
     // Project Selection
     const filteredProjects = projects.filter(p => 
@@ -333,6 +410,45 @@ export default function MaintenanceReportModal({ isOpen, onClose, onSave, initia
             alert(`操作失敗：\n${error.message}`);
         } finally {
             setIsSaving(false);
+        }
+    };
+
+    const handleFirestoreRepairNoteWrite = async () => {
+        if (!firestoreTarget.projectId || !firestoreTarget.reportId) {
+            return;
+        }
+
+        setIsWritingRepairNote(true);
+        setFirestoreWriteFeedback(null);
+
+        try {
+            const result = await actions.updateFirestoreRepairNoteAction({
+                projectId: firestoreTarget.projectId,
+                reportId: firestoreTarget.reportId,
+                repairNote: formData.repair_notes || "",
+            });
+
+            setFormData((prev) => ({
+                ...prev,
+                repair_notes: result.after.repairNote,
+            }));
+            setFirestoreWriteFeedback({
+                kind: "success",
+                message: "Firestore repairNote updated successfully.",
+                beforeRepairNote: result.before.repairNote,
+                afterRepairNote: result.after.repairNote,
+                beforeAfterSame: result.before.repairNote === result.after.repairNote,
+                readBackConsistent: result.firestoreReadBackOk && result.unchangedOtherFields,
+                verifiedAt: result.verifiedAt,
+            });
+            await onSave();
+        } catch (error: any) {
+            setFirestoreWriteFeedback({
+                kind: "error",
+                message: error?.message || "Firestore repairNote update failed.",
+            });
+        } finally {
+            setIsWritingRepairNote(false);
         }
     };
 
@@ -757,6 +873,62 @@ export default function MaintenanceReportModal({ isOpen, onClose, onSave, initia
                             rows={5}
                             className="w-full bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800 rounded-[2.5rem] px-10 py-8 text-sm font-bold focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none shadow-inner resize-none transition-all placeholder:text-zinc-300"
                         />
+                        <div className="rounded-[2rem] border border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900/60 px-6 py-5 space-y-4">
+                            <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p className="text-xs font-black uppercase tracking-[0.25em] text-zinc-500">
+                                            Firestore RepairNote
+                                        </p>
+                                        <p className="text-sm font-bold text-zinc-700 dark:text-zinc-200">
+                                            Separate action. Draft save stays unchanged.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleFirestoreRepairNoteWrite}
+                                        disabled={!canWriteFirestoreRepairNote || isWritingRepairNote}
+                                        className="rounded-[1.4rem] bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-[0.2em] text-white shadow-lg shadow-blue-500/15 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        {isWritingRepairNote ? "Writing..." : "Write Firestore repairNote"}
+                                    </button>
+                                </div>
+                                <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 break-all">
+                                    {isLoadingFirestoreTarget
+                                        ? "Resolving Firestore target..."
+                                        : firestoreTarget.docPath
+                                            ? `Target: ${firestoreTarget.docPath}`
+                                            : "Missing projectId / reportId, so Firestore repairNote write is disabled."}
+                                </p>
+                            </div>
+
+                            {firestoreWriteFeedback && (
+                                <div
+                                    className={`rounded-[1.5rem] border px-4 py-4 text-sm ${
+                                        firestoreWriteFeedback.kind === "success"
+                                            ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100"
+                                            : "border-red-200 bg-red-50 text-red-900 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-100"
+                                    }`}
+                                >
+                                    <p className="font-black">{firestoreWriteFeedback.message}</p>
+                                    {firestoreWriteFeedback.kind === "success" && (
+                                        <div className="mt-3 space-y-1 text-xs font-medium">
+                                            <p>Before repairNote: {firestoreWriteFeedback.beforeRepairNote || "(empty)"}</p>
+                                            <p>After repairNote: {firestoreWriteFeedback.afterRepairNote || "(empty)"}</p>
+                                            <p>
+                                                Before / after same: {firestoreWriteFeedback.beforeAfterSame ? "Yes" : "No"}
+                                            </p>
+                                            <p>
+                                                Verified: {firestoreWriteFeedback.readBackConsistent ? "Yes" : "No"}
+                                            </p>
+                                            {firestoreWriteFeedback.verifiedAt && (
+                                                <p>Verified at: {firestoreWriteFeedback.verifiedAt}</p>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     </section>
 
                 </div>

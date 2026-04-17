@@ -80,14 +80,13 @@ export default function SchedulePage() {
             const end = new Date();
             end.setMonth(end.getMonth() + 6);
 
-            const [internalData, googleData] = await Promise.all([
-                actions.getSchedulesAction(formatLocal(start), formatLocal(end)),
-                actions.fetchGoogleOverlayAction(start.toISOString(), end.toISOString()).catch(e => {
-                    console.error("Failed to fetch Google overlay", e);
-                    return [];
-                })
-            ]);
-            setDbSchedules([...internalData, ...googleData]);
+            const mergedData = await actions.getScheduleViewDataAction(
+                formatLocal(start),
+                formatLocal(end),
+                start.toISOString(),
+                end.toISOString()
+            );
+            setDbSchedules(mergedData);
         } catch (error: any) {
             console.error("Failed to fetch schedules", error);
             alert(`讀取排程失敗：\n${error.message}`);
@@ -203,7 +202,7 @@ export default function SchedulePage() {
     const activeMonth = activeDate.getMonth();
 
     return (
-        <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 h-[calc(100vh-3.5rem)] flex flex-col">
+        <div className="w-full px-4 py-4 sm:px-6 h-[calc(100vh-3.5rem)] flex flex-col">
             <div className="flex flex-col md:flex-row items-start md:items-end justify-between mb-4 gap-4 shrink-0">
                 <div className="flex items-baseline gap-3">
                     <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">

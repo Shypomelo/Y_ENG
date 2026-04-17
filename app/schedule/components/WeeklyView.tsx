@@ -5,6 +5,7 @@ import { DailySchedule, TodoItem } from "../../../lib/types/database";
 import { useProjects } from "../../providers/projects-store";
 import ScheduleModal from "./ScheduleModal";
 import * as actions from "../actions";
+import { formatProjectName } from "../../../lib/utils/formatters";
 
 interface WeeklyViewProps {
     schedules: DailySchedule[];
@@ -204,22 +205,141 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
 
     const allStaff = Object.values(peopleByDept).flat();
 
-    const getSchedulesForDay = (date: Date) => {
-        const dateStr = formatLocalDate(date);
-        const daySchedules = schedules
-            .filter(s => s.schedule_date === dateStr && s.status !== 'application' && s.case_type !== '任務申請');
-        const internalGoogleEventIds = new Set(
-            daySchedules
+    const buildGoogleReadonlyUpdates = (
+        schedule: DailySchedule,
+        targetDate: string,
+        existingInternal?: DailySchedule | null
+    ): Partial<DailySchedule> => ({
+        schedule_date: targetDate,
+        start_time: schedule.is_all_day
+            ? null
+            : (schedule.start_time ? `${schedule.start_time.slice(0, 5)}:00` : (existingInternal?.start_time || null)),
+        end_time: schedule.is_all_day
+            ? null
+            : (schedule.end_time ? `${schedule.end_time.slice(0, 5)}:00` : (existingInternal?.end_time || null)),
+        start_datetime: schedule.start_datetime ?? existingInternal?.start_datetime ?? null,
+        end_datetime: schedule.end_datetime ?? existingInternal?.end_datetime ?? null,
+        is_all_day: schedule.is_all_day ?? existingInternal?.is_all_day ?? false,
+        case_name: schedule.case_name || schedule.title || '從 Google 匯入',
+        address: schedule.address || null,
+        description: schedule.description || null,
+        case_type: schedule.case_type || '其他',
+        status: schedule.status && schedule.status !== 'application' ? schedule.status : 'pending_claim',
+    });
+
+    const buildGoogleReadonlyAdoptionPayload = (
+        schedule: DailySchedule,
+        targetDate: string,
+        existingInternal?: DailySchedule | null
+    ): Partial<DailySchedule> => ({
+        schedule_date: targetDate,
+        start_time: schedule.is_all_day
+            ? null
+            : (schedule.start_time ? `${schedule.start_time.slice(0, 5)}:00` : (existingInternal?.start_time || null)),
+        end_time: schedule.is_all_day
+            ? null
+            : (schedule.end_time ? `${schedule.end_time.slice(0, 5)}:00` : (existingInternal?.end_time || null)),
+        start_datetime: schedule.start_datetime ?? existingInternal?.start_datetime ?? null,
+        end_datetime: schedule.end_datetime ?? existingInternal?.end_datetime ?? null,
+        is_all_day: schedule.is_all_day ?? existingInternal?.is_all_day ?? false,
+        case_name: schedule.case_name || schedule.title || existingInternal?.case_name || '敺?Google ?臬',
+        address: schedule.address ?? existingInternal?.address ?? null,
+        description: schedule.description ?? existingInternal?.description ?? null,
+        case_type: existingInternal?.case_type ?? schedule.case_type ?? null,
+        status: existingInternal?.status ?? (schedule.status && schedule.status !== 'application' ? schedule.status : 'pending_claim'),
+    });
+
+    const hasGoogleScheduleTimingDrift = (internal: DailySchedule, overlay: DailySchedule) => {
+        const normalizeTime = (value?: string | null) => (value ? value.slice(0, 5) : null);
+
+        return (
+            (internal.schedule_date || null) !== (overlay.schedule_date || null) ||
+            normalizeTime(internal.start_time) !== normalizeTime(overlay.start_time) ||
+            normalizeTime(internal.end_time) !== normalizeTime(overlay.end_time) ||
+            Boolean(internal.is_all_day) !== Boolean(overlay.is_all_day)
+        );
+    };
+
+    // Normalize schedules: filter out google readonly duplicates only when internal timing already matches
+    const normalizedSchedules = useMemo(() => {
+        const internalByGoogleId = new Map(
+            schedules
+                .filter(s => s.source !== 'google_readonly' && s.google_event_id)
+                .map(s => [s.google_event_id!, s] as const)
+        );
+
+        return schedules.filter(s => {
+            if (s.source === 'google_readonly' && s.google_event_id) {
+                const mappedInternal = internalByGoogleId.get(s.google_event_id);
+                if (mappedInternal && !hasGoogleScheduleTimingDrift(mappedInternal, s)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+    }, [schedules]);
+
+    const allInternalGoogleEventIds = useMemo(() => {
+        return new Set(
+            normalizedSchedules
                 .filter(s => s.source !== 'google_readonly' && s.google_event_id)
                 .map(s => s.google_event_id)
         );
+    }, [normalizedSchedules]);
+
+    const internalSchedulesByGoogleEventId = useMemo(() => {
+        return new Map(
+            schedules
+                .filter(s => s.source !== 'google_readonly' && s.google_event_id)
+                .map(s => [s.google_event_id!, s] as const)
+        );
+    }, [schedules]);
+
+    const getSchedulesForDay = (date: Date) => {
+        const dateStr = formatLocalDate(date);
+        const daySchedules = normalizedSchedules
+            .filter(s => s.schedule_date === dateStr && s.status !== 'application' && s.case_type !== '任務申請');
         return daySchedules
-            .filter(s => !(s.source === 'google_readonly' && internalGoogleEventIds.has(s.google_event_id)))
             .sort((a, b) => {
                 const timeA = a.start_time || "99:99";
                 const timeB = b.start_time || "99:99";
                 return timeA.localeCompare(timeB);
             });
+    };
+
+    const openScheduleModal = (schedule: DailySchedule) => {
+        const actual = normalizedSchedules.find((s) => s.id === schedule.id) || schedule;
+        setModalConfig({
+            isOpen: true,
+            initialData: actual,
+            mode: actual.status === 'application' ? 'application' : 'default',
+            appId: actual.status === 'application' ? actual.id : undefined,
+        });
+    };
+
+    const moveScheduleToDate = async (schedule: DailySchedule, targetDate: string) => {
+        if (schedule.source === 'google_readonly') {
+            const existingInternal = schedule.google_event_id
+                ? (internalSchedulesByGoogleEventId.get(schedule.google_event_id) || null)
+                : null;
+
+            if (existingInternal) {
+                await actions.updateScheduleAction(
+                    existingInternal.id,
+                    buildGoogleReadonlyAdoptionPayload(schedule, targetDate, existingInternal)
+                );
+                return;
+            }
+
+            await actions.createScheduleAction({
+                ...buildGoogleReadonlyAdoptionPayload(schedule, targetDate),
+                google_event_id: schedule.google_event_id,
+                sync_status: 'synced'
+            } as any);
+            return;
+        }
+
+        await actions.updateScheduleAction(schedule.id, { schedule_date: targetDate });
     };
 
     const formatDate = (date: Date) => {
@@ -398,94 +518,109 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
     };
 
     const statusColors: Record<string, string> = {
-        application: 'bg-amber-50/50 border-amber-200 text-amber-700 dark:bg-amber-900/10 dark:border-amber-900/40 dark:text-amber-300',
-        pending_claim: 'bg-orange-50/50 border-orange-100 text-orange-600 dark:bg-orange-900/5 dark:border-orange-900/20 dark:text-orange-300',
-        scheduled: 'bg-sky-50/50 border-sky-100 text-sky-600 dark:bg-sky-900/5 dark:border-sky-900/20 dark:text-sky-300',
-        done: 'bg-emerald-50/50 border-emerald-100 text-emerald-600 dark:bg-emerald-900/5 dark:border-emerald-900/20 dark:text-emerald-300',
-        cancelled: 'bg-slate-50/50 border-slate-200 text-slate-500 dark:bg-slate-900/5 dark:border-slate-800 dark:text-slate-400',
+        application: 'bg-amber-100 border-amber-300 text-amber-800 dark:bg-amber-900/30 dark:border-amber-700 dark:text-amber-200',
+        pending_claim: 'bg-orange-50 border-orange-300 text-orange-700 dark:bg-orange-900/20 dark:border-orange-700 dark:text-orange-200',
+        scheduled: 'bg-sky-50 border-sky-300 text-sky-700 dark:bg-sky-900/20 dark:border-sky-700 dark:text-sky-200',
+        done: 'bg-emerald-50 border-emerald-200 text-emerald-600 dark:bg-emerald-900/10 dark:border-emerald-800 dark:text-emerald-300',
+        cancelled: 'bg-slate-100 border-slate-300 text-slate-500 dark:bg-slate-900/20 dark:border-slate-700 dark:text-slate-400',
+    };
+
+    // Purpose badge color by case_type (Soft background, bold text)
+    const purposeColors: Record<string, string> = {
+        '掛表': 'bg-red-50 text-red-600 border-red-100',
+        '停電': 'bg-red-50 text-red-600 border-red-100',
+        '進場': 'bg-red-50 text-red-600 border-red-100',
+        '現勘': 'bg-red-50 text-red-600 border-red-100',
+
+        '建置': 'bg-orange-50 text-orange-600 border-orange-100',
+
+        '維修': 'bg-emerald-50 text-emerald-600 border-emerald-100',
+        '電檢': 'bg-emerald-50 text-emerald-600 border-emerald-100',
+        '驗收': 'bg-emerald-50 text-emerald-600 border-emerald-100',
+        '清洗': 'bg-emerald-50 text-emerald-600 border-emerald-100',
+
+        '內勤': 'bg-sky-50 text-sky-600 border-sky-100',
+        '其他': 'bg-sky-50 text-sky-600 border-sky-100',
+
+        '休假': 'bg-red-600 text-white border-red-700',
+    };
+
+    const purposeBorderColors: Record<string, string> = {
+        '掛表': 'border-l-4 border-red-500',
+        '停電': 'border-l-4 border-red-500',
+        '進場': 'border-l-4 border-red-500',
+        '現勘': 'border-l-4 border-red-500',
+        '建置': 'border-l-4 border-orange-500',
+        '維修': 'border-l-4 border-emerald-500',
+        '電檢': 'border-l-4 border-emerald-500',
+        '驗收': 'border-l-4 border-emerald-500',
+        '清洗': 'border-l-4 border-emerald-500',
+        '內勤': 'border-l-4 border-sky-500',
+        '其他': 'border-l-4 border-sky-500',
+        '休假': 'border-l-4 border-red-700',
     };
 
     const renderCardSummary = (s: DailySchedule) => {
-        const region = extractRegion(s.address, s.case_name);
+        const { title, aux, region: projectRegion } = formatProjectName(s.case_name);
+        const region = projectRegion || extractRegion(s.address, null);
         const mainEngineer = allStaff.find(st => st.id === s.engineer_id);
         const helpers = (s.assignee_ids || []).map(id => allStaff.find(st => st.id === id)?.name).filter(Boolean);
         const isDone = s.status === 'done';
+        const purpose = s.case_type || '其他';
+        const purposeColor = purposeColors[purpose] || purposeColors['其他'];
+        const isOnsitePurpose = purpose === '進場';
+        const timeStr = s.is_all_day ? '全天' : (s.start_time?.slice(0, 5) || '未定');
 
         return (
-            <div className="flex flex-col gap-2.5 text-xs">
-                {/* 1. 項目 */}
-                <div className="flex items-center gap-1.5">
-                    <span className="font-black text-[11px] text-zinc-400 uppercase shrink-0">項目</span>
-                    <span className={`font-black text-[13px] ${isDone ? 'text-zinc-400' : 'text-zinc-900 dark:text-zinc-100'}`}>{s.case_type || '一般'}</span>
+            <div className="flex flex-col gap-2 text-sm leading-tight">
+                {/* Layer 1: Purpose & Region */}
+                <div className="flex items-center gap-1.5 overflow-hidden">
+                    <span className={`${isOnsitePurpose ? "text-[14px] px-3 py-1 rounded-lg shadow-md ring-2 ring-red-200/80 dark:ring-red-900/60" : "text-[12px] px-2 py-0.5 rounded"} font-black border tracking-tight shrink-0 ${purposeColor}`}>
+                        {purpose}
+                    </span>
+                    {region && (
+                        <span className="text-[11px] font-bold text-zinc-400 bg-zinc-50 border border-zinc-100 px-1.5 py-0.5 rounded truncate">
+                            {region}
+                        </span>
+                    )}
+                    {s.sync_status === 'synced' && <div className="w-2 h-2 rounded-full bg-emerald-500 ml-auto shrink-0" title="已同步 Google" />}
                 </div>
 
-                {/* 2. 區域 (Optional) */}
-                {region && (
-                    <div className="flex items-center gap-1.5">
-                        <span className="font-black text-[11px] text-zinc-400 uppercase shrink-0">區域</span>
-                        <span className="font-black text-[13px] text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-2 py-0.5 rounded shadow-sm border border-blue-100/50 dark:border-blue-900/30">{region}</span>
-                    </div>
-                )}
+                {/* Layer 2: Project Name (Primary Identifier, Bold & Large) */}
+                <h4 className={`font-black text-[18px] leading-[1.3] line-clamp-2 tracking-tight ${isDone ? 'text-zinc-400 line-through' : 'text-zinc-800 dark:text-zinc-50'}`} title={s.case_name || ''}>
+                    {title}
+                </h4>
 
-                {/* 3. 案件名稱 */}
-                <div className="flex flex-col gap-1">
-                    <span className="font-black text-[11px] text-zinc-400 uppercase">案件名稱</span>
-                    <span className={`font-black text-[15px] ${isDone ? 'text-zinc-400 line-through' : 'text-zinc-900 dark:text-zinc-100'} leading-snug line-clamp-2`}>{s.case_name || '未命名案件'}</span>
-                </div>
-
-                {/* 4. 位址 (Show directly with icon, blue, clickable, NO LABEL) */}
+                {/* Layer 3: Address (One line) */}
                 {s.address && (
-                    <div className="flex items-start gap-1 pt-1">
-                        <svg className="w-4 h-4 shrink-0 text-blue-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                        <a 
-                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address)}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="text-blue-600 dark:text-blue-400 hover:text-blue-800 hover:underline font-black text-[14px] leading-tight break-all"
-                        >
-                            {s.address}
-                        </a>
+                    <div className="flex items-center gap-1 text-[13px] text-zinc-500 dark:text-zinc-400 font-medium">
+                        <svg className="w-3.5 h-3.5 shrink-0 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        <span className="truncate">{s.address}</span>
                     </div>
                 )}
 
-                {/* 5. 備註 */}
-                {s.description && (
-                    <div className="flex flex-col gap-1 p-2.5 bg-amber-50/50 dark:bg-amber-900/10 rounded-xl border border-amber-100 dark:border-amber-900/20">
-                        <span className="font-black text-[11px] text-amber-600 dark:text-amber-400/70 uppercase">備註</span>
-                        <span className="font-black text-[14px] text-amber-800 dark:text-amber-300 leading-relaxed italic">
-                            {s.description}
-                        </span>
-                    </div>
-                )}
-
-                {/* 6. 主工程 */}
-                <div className="flex items-center gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800/50 mt-1">
-                    <span className="font-black text-[11px] text-zinc-400 uppercase shrink-0">主工程</span>
-                    <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 rounded-full bg-zinc-200 dark:bg-zinc-700 flex items-center justify-center text-[10px] font-black shadow-inner">{mainEngineer?.name?.charAt(0) || '?'}</div>
-                        <span className="font-black text-[15px] text-zinc-900 dark:text-zinc-100">
-                            {mainEngineer?.name || '待領取'}
-                        </span>
+                {/* Layer 4: Time + Personnel (Names listed directly) */}
+                <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-1">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                        <span className="font-bold text-[13px] text-zinc-800 dark:text-zinc-200 shrink-0">{timeStr}</span>
+                        {(mainEngineer || helpers.length > 0) && (
+                            <div className="flex items-center gap-1 text-[13px] font-black text-zinc-900 dark:text-zinc-100 truncate">
+                                {mainEngineer && <span>{mainEngineer.name}</span>}
+                                {helpers.length > 0 && (
+                                    <span className="text-zinc-400">
+                                        {mainEngineer ? '、' : ''}{helpers.join('、')}
+                                    </span>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
-
-                {/* 7. 協助人員 (NO LABEL, simple tags) */}
-                {helpers.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 ml-[54px]">
-                        {helpers.map((name, i) => (
-                            <span key={i} className="font-black text-zinc-600 dark:text-zinc-400 bg-zinc-100/80 dark:bg-zinc-800/80 px-2 py-0.5 rounded-md text-[11px] border border-zinc-200/50 dark:border-zinc-700/50">
-                                {name}
-                            </span>
-                        ))}
-                    </div>
-                )}
             </div>
         );
     };
 
     return (
-        <div className="flex h-full gap-4 overflow-hidden p-4 bg-zinc-50/50 dark:bg-black/20">
+        <div className="flex h-full gap-3 overflow-hidden p-3 bg-zinc-50/50 dark:bg-black/20">
             <div className="flex-1 flex flex-col min-w-0 bg-white dark:bg-zinc-900 rounded-3xl shadow-xl border border-zinc-200 dark:border-zinc-800 transition-all overflow-hidden">
                 <div className="flex items-center justify-between mb-6 px-4 pt-6 shrink-0">
                     <div className="flex items-center gap-6">
@@ -505,21 +640,76 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
                     </div>
                     <button onClick={() => setModalConfig({ isOpen: true, initialData: { status: 'pending_claim' } as DailySchedule })} className="flex items-center gap-2.5 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-base font-black shadow-xl shadow-blue-500/30 transition-all active:scale-95 glow-blue" > <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" /></svg> 新增排程 </button>
                 </div>
-                <div className="flex-1 overflow-auto no-scrollbar p-6 bg-zinc-50/50 dark:bg-black/10">
+                <div className="flex-1 overflow-auto no-scrollbar p-3 bg-zinc-50/50 dark:bg-black/10">
                     {activeTab === "week" && (
-                        <div className="grid grid-cols-7 min-w-[1000px] gap-3 h-full min-h-[600px]">
+                        <div className="grid grid-cols-7 min-w-[900px] gap-2 h-full min-h-[600px]">
                             {weekDays.map((date, idx) => {
                                 const dateSimple = formatLocalDate(date);
                                 const isToday = dateSimple === todayStr;
                                 const daySchedules = getSchedulesForDay(date);
                                 const dayName = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"][idx];
                                 return (
-                                    <div key={idx} onDoubleClick={() => setModalConfig({ isOpen: true, initialDate: dateSimple, initialData: { status: 'pending_claim' } as DailySchedule })} className={`flex flex-col h-full bg-white dark:bg-zinc-900/40 rounded-3xl border transition-all ${isToday ? 'border-blue-400 dark:border-blue-600 shadow-xl ring-2 ring-blue-500/10' : 'border-zinc-100 dark:border-zinc-800 shadow-sm'} overflow-hidden hover:shadow-lg`} >
-                                        <div className={`px-2 py-4 flex flex-col items-center justify-center border-b ${isToday ? 'bg-blue-600 border-blue-600' : 'bg-zinc-50 dark:bg-zinc-800/70 border-zinc-100 dark:border-zinc-800'}`}>
-                                            <span className={`text-[10px] font-black mb-1 opacity-60 tracking-wider uppercase ${isToday ? 'text-blue-100' : 'text-zinc-500'}`}>{dayName}</span>
-                                            <span className={`text-2xl font-black ${isToday ? 'text-white' : 'text-zinc-900 dark:text-zinc-100'}`}>{date.getDate()}</span>
+                                    <div key={idx} onDoubleClick={() => setModalConfig({ isOpen: true, initialDate: dateSimple, initialData: { status: 'pending_claim' } as DailySchedule })} className={`flex flex-col h-full bg-white dark:bg-zinc-900 border-2 transition-all ${isToday ? 'border-amber-400 shadow-2xl ring-4 ring-amber-500/5 scale-[1.02] z-10' : 'border-zinc-100 dark:border-zinc-800 shadow-sm'} overflow-hidden hover:shadow-lg hover:border-zinc-300 rounded-3xl`} >
+                                        <div className={`px-2 py-5 flex flex-col items-center justify-center border-b-2 gap-1 ${isToday ? 'bg-amber-50/80 border-amber-200' : 'bg-zinc-50/30 dark:bg-zinc-800/50 border-zinc-100 dark:border-zinc-800'}`}>
+                                            <span className={`text-4xl font-black tracking-tighter ${isToday ? 'text-amber-600' : 'text-zinc-900 dark:text-zinc-100'}`}>{date.getDate()}</span>
+                                            <span className={`text-[16px] font-black tracking-widest ${isToday ? 'text-amber-500' : 'text-zinc-500'}`}>{dayName}</span>
                                         </div>
-                                        <div className="flex-1 p-2 overflow-y-auto no-scrollbar space-y-3" onDragOver={(e) => e.preventDefault()} onDrop={async (e) => { e.preventDefault(); const todoStr = e.dataTransfer.getData("todo"); const scheduleStr = e.dataTransfer.getData("schedule"); if (todoStr) { const todo = JSON.parse(todoStr); try { await actions.createScheduleAction({ case_name: todo.title, schedule_date: dateSimple, status: 'pending_claim', case_type: '其他' } as any); await actions.deleteTodoAction(todo.id); fetchTodos(); refreshSchedules(); } catch (err: any) { alert(`拖曳轉入失敗：\n${err.message}`); } } else if (scheduleStr) { const schedule = JSON.parse(scheduleStr); try { let updateId = schedule.id; if (schedule.source === 'google_readonly') { const existingInternal = schedules.find(s => s.google_event_id === schedule.google_event_id && s.source !== 'google_readonly'); if (existingInternal) { updateId = existingInternal.id; } else { (await actions.createScheduleAction({ case_name: schedule.case_name || schedule.title || "從 Google 匯入", schedule_date: dateSimple, start_time: schedule.start_time ? `${schedule.start_time}:00` : null, end_time: schedule.end_time ? `${schedule.end_time}:00` : null, address: schedule.address || null, description: schedule.description || null, status: 'pending_claim', google_event_id: schedule.google_event_id, sync_status: 'synced' } as any)); refreshSchedules(); return; } } await actions.updateScheduleAction(updateId, { schedule_date: dateSimple }); refreshSchedules(); } catch (err: any) { alert(`移動排程失敗：\n${err.message}`); } } }} >
+                                        <div 
+                                            className="flex-1 p-1 overflow-y-auto no-scrollbar space-y-2" 
+                                            onDragOver={(e) => e.preventDefault()} 
+                                            onDrop={async (e) => { 
+                                                e.preventDefault(); 
+                                                const todoStr = e.dataTransfer.getData("todo"); 
+                                                const scheduleStr = e.dataTransfer.getData("schedule"); 
+                                                
+                                                if (todoStr) {
+                                                    const todo = JSON.parse(todoStr);
+                                                    console.log("[WeeklyView] Drop Todo", todo.id, "to", dateSimple);
+                                                    try {
+                                                        await actions.createScheduleAction({
+                                                            case_name: todo.title,
+                                                            schedule_date: dateSimple,
+                                                            status: 'pending_claim',
+                                                            case_type: '其他'
+                                                        } as any);
+                                                        await actions.deleteTodoAction(todo.id);
+                                                        fetchTodos();
+                                                        refreshSchedules();
+                                                    } catch (err: any) {
+                                                        console.error("[WeeklyView] Todo transfer failed", err);
+                                                        alert(`拖曳轉入失敗：\n${err.message}`);
+                                                    }
+                                                } else if (scheduleStr) {
+                                                    const schedule = JSON.parse(scheduleStr);
+                                                    console.log("[WeeklyView] Drop Schedule", schedule.id, "to", dateSimple);
+                                                    try {
+                                                        // Important: Pass relevant info for Google Adoption if first move
+                                                        if (schedule.source === 'google_readonly') {
+                                                            await moveScheduleToDate(schedule, dateSimple);
+                                                            refreshSchedules();
+                                                            return;
+                                                        }
+
+                                                        const updates: any = { schedule_date: dateSimple };
+                                                        if (schedule.source === 'google_readonly') {
+                                                            updates.case_name = schedule.case_name || schedule.title;
+                                                            updates.description = schedule.description;
+                                                            updates.address = schedule.address;
+                                                            // Pass times so they don't get reset to 00:00:00 during adoption
+                                                            updates.start_time = schedule.start_time ? `${schedule.start_time}:00` : null;
+                                                            updates.end_time = schedule.end_time ? `${schedule.end_time}:00` : null;
+                                                            updates.case_type = schedule.case_type || '其他';
+                                                        }
+                                                        
+                                                        await actions.updateScheduleAction(schedule.id, updates);
+                                                        refreshSchedules();
+                                                    } catch (err: any) {
+                                                        console.error("[WeeklyView] Schedule move failed", err);
+                                                        alert(`移動排程失敗：\n${err.message}`);
+                                                    }
+                                                }
+                                            }} 
+                                        >
                                             {daySchedules.length === 0 ? (
                                                 <div className="h-full flex items-center justify-center cursor-pointer group py-10" onClick={() => setModalConfig({ isOpen: true, initialDate: dateSimple, initialData: { status: 'pending_claim' } as DailySchedule })} >
                                                     <div className="text-[10px] text-zinc-300 dark:text-zinc-700 font-black group-hover:text-blue-400 group-hover:scale-110 transition-all italic tracking-widest"> EMPTY </div>
@@ -528,24 +718,27 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
                                                 daySchedules.map(s => {
                                                     const isDone = s.status === 'done';
                                                     const isGoogle = s.source === 'google_readonly';
+                                                    const cardBackgroundClass = isGoogle
+                                                        ? 'bg-indigo-50 border-indigo-300 dark:bg-indigo-900/20 dark:border-indigo-700'
+                                                        : isDone
+                                                            ? 'opacity-50 grayscale bg-zinc-50 border-zinc-300 dark:bg-zinc-800/20'
+                                                            : 'bg-white border-zinc-200 dark:bg-zinc-900/10 dark:border-zinc-700';
+                                                    const caseTypeAccent = purposeBorderColors[s.case_type || '其他'] || 'border-l-4 border-zinc-300';
+
                                                     return (
                                                         <div
                                                             key={s.id}
                                                             draggable={true}
-                                                            onDragStart={(e) => { e.dataTransfer.setData("schedule", JSON.stringify(s)); }}
-                                                            onClick={(e) => { if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('a')) return; setModalConfig({ isOpen: true, initialData: s, mode: s.status === 'application' ? 'application' : 'default', appId: s.status === 'application' ? s.id : undefined }); }}
-                                                            className={`p-4 rounded-2xl border-2 relative group/item transition-all hover:shadow-xl active:scale-[0.98] cursor-grab active:cursor-grabbing ${isGoogle ? 'bg-indigo-50/30 border-indigo-200/50 dark:bg-indigo-900/10 dark:border-indigo-800/50' : isDone ? 'opacity-50 grayscale bg-zinc-50 border-zinc-200 dark:bg-zinc-800/20' : statusColors[s.status || 'pending_claim']}`}
-                                                        >
-                                                            <div className="flex items-center justify-between mb-3">
-                                                                <div className="flex items-center gap-1.5 font-black text-[12px] opacity-70">
-                                                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                                    {s.is_all_day ? "全天" : (s.start_time?.slice(0, 5) || "未定")}
-                                                                    {s.sync_status === 'synced' && <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" />}
-                                                                </div>
+                                                            onDragStart={(e) => { 
+                                                                console.log("[WeeklyView] Drag Start", s.id);
+                                                                e.dataTransfer.setData("schedule", JSON.stringify(s)); 
+                                                            }}
+                                                            onClick={(e) => { if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('a')) return; openScheduleModal(s); }}
+                                                            className={`p-3.5 rounded-2xl border transition-all hover:shadow-xl active:scale-[0.98] cursor-grab active:cursor-grabbing ${isDone ? 'opacity-50 grayscale bg-zinc-50 border-zinc-100' : 'bg-white border-zinc-200 shadow-sm'}`}
+                                                           >
                                                                 {!isGoogle && (
-                                                                    <button onClick={() => handleQuickComplete(s)} className={`p-1 rounded-lg transition-all ${isDone ? 'bg-emerald-500 text-white shadow-sm' : 'bg-white text-emerald-600 hover:bg-emerald-600 hover:text-white border shadow-sm opacity-0 group-hover/item:opacity-100'}`} > <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={4}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg> </button>
+                                                                    <button onClick={() => handleQuickComplete(s)} className={`absolute top-2.5 right-2.5 p-1 rounded-lg transition-all z-10 ${isDone ? 'bg-emerald-500 text-white' : 'bg-white/90 text-zinc-400 hover:text-emerald-500 border border-zinc-100 shadow-sm opacity-0 group-hover/item:opacity-100'}`} > <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg> </button>
                                                                 )}
-                                                            </div>
                                                             {renderCardSummary(s)}
                                                         </div>
                                                     );
@@ -567,13 +760,64 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
                                 {monthDays.map((date, idx) => {
                                     const dateStr = formatLocalDate(date); const isCurrentMonth = date.getMonth() === currentDate.getMonth(); const daySchedules = getSchedulesForDay(date); const isToday = dateStr === todayStr;
                                     return (
-                                        <div key={idx} className={`min-h-[120px] p-2 border-r border-b border-zinc-50 dark:border-zinc-800/50 last:border-r-0 flex flex-col ${isCurrentMonth ? 'hover:bg-zinc-50/50 transition-colors' : 'bg-zinc-50/30 dark:bg-zinc-900/10 opacity-30 pointer-events-none'}`} onClick={() => isCurrentMonth && setModalConfig({ isOpen: true, initialDate: dateStr, initialData: { status: 'pending_claim' } as DailySchedule })} >
-                                            <div className="flex justify-end mb-1"> <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${isToday ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' : 'text-zinc-400'}`}> {date.getDate()} </span> </div>
+                                        <div 
+                                            key={idx} 
+                                            className={`min-h-[120px] p-2 border-r border-b border-zinc-50 dark:border-zinc-800/50 last:border-r-0 flex flex-col ${isCurrentMonth ? 'hover:bg-zinc-50/50 transition-colors' : 'bg-zinc-50/30 dark:bg-zinc-900/10 opacity-30 pointer-events-none'}`}
+                                            onDragOver={(e) => e.preventDefault()}
+                                            onDrop={async (e) => {
+                                                e.preventDefault();
+                                                if (!isCurrentMonth) return;
+                                                const scheduleStr = e.dataTransfer.getData("schedule");
+                                                if (scheduleStr) {
+                                                    const schedule = JSON.parse(scheduleStr);
+                                                    console.log("[MonthView] Drop Schedule", schedule.id, "to", dateStr);
+                                                    try {
+                                                        if (schedule.source === 'google_readonly') {
+                                                            await moveScheduleToDate(schedule, dateStr);
+                                                            refreshSchedules();
+                                                            return;
+                                                        }
+
+                                                        const updates: any = { schedule_date: dateStr };
+                                                        if (schedule.source === 'google_readonly') {
+                                                            updates.case_name = schedule.case_name || schedule.title;
+                                                            updates.description = schedule.description;
+                                                            updates.address = schedule.address;
+                                                            updates.start_time = schedule.start_time ? `${schedule.start_time}:00` : null;
+                                                            updates.end_time = schedule.end_time ? `${schedule.end_time}:00` : null;
+                                                            updates.case_type = schedule.case_type || '其他';
+                                                        }
+                                                        await actions.updateScheduleAction(schedule.id, updates);
+                                                        refreshSchedules();
+                                                    } catch (err: any) {
+                                                        console.error("[MonthView] Schedule move failed", err);
+                                                        alert(`移動排程失敗：\n${err.message}`);
+                                                    }
+                                                }
+                                            }}
+                                            onDoubleClick={() => isCurrentMonth && setModalConfig({ isOpen: true, initialDate: dateStr, initialData: { status: 'pending_claim' } as DailySchedule })}
+                                        >
+                                            <div className="flex justify-end mb-1"> <span className={`text-[11px] font-black px-2 py-0.5 rounded-full ${isToday ? 'bg-amber-400 text-white shadow-lg shadow-amber-500/30' : 'text-zinc-500'}`}> {date.getDate()} </span> </div>
                                             <div className="flex-1 space-y-1 overflow-hidden">
                                                 {daySchedules.map(s => {
                                                     const isGoogle = s.source === 'google_readonly';
                                                     return (
-                                                        <div key={s.id} onClick={(e) => { e.stopPropagation(); if (isGoogle) return; setModalConfig({ isOpen: true, initialData: s }); }} className={`px-2 py-1 text-[9px] font-black rounded-lg truncate border shadow-sm transition-all ${isGoogle ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : `${s.status === 'done' ? 'opacity-40 grayscale' : statusColors[s.status || 'pending_claim']}`}`} > {s.is_all_day ? '' : s.start_time?.slice(0, 5)} {s.case_name} </div>
+                                                        <div 
+                                                            key={s.id}
+                                                            draggable={!isGoogle}
+                                                            onDragStart={(e) => { 
+                                                                if (isGoogle) {
+                                                                    e.preventDefault();
+                                                                    return;
+                                                                }
+                                                                console.log("[MonthView] Drag Start", s.id);
+                                                                e.dataTransfer.setData("schedule", JSON.stringify(s)); 
+                                                            }}
+                                                            onClick={(e) => { e.stopPropagation(); if (isGoogle) return; openScheduleModal(s); }} 
+                                                            className={`px-2 py-1.5 text-[12px] font-black rounded-lg truncate border shadow-sm transition-all cursor-grab active:cursor-grabbing ${isGoogle ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : `${s.status === 'done' ? 'opacity-40 grayscale' : statusColors[s.status || 'pending_claim']}`}`} 
+                                                        > 
+                                                            {s.case_type ? `[${s.case_type}] ` : ''}{s.case_name} 
+                                                        </div>
                                                     );
                                                 })}
                                             </div>
@@ -606,22 +850,22 @@ export default function WeeklyView({ schedules, refreshSchedules }: WeeklyViewPr
                     )}
                 </div>
             </div>
-            <div className="w-80 flex flex-col shrink-0 h-full overflow-hidden bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-2xl">
+            <div className="w-60 flex flex-col shrink-0 h-full overflow-hidden bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-lg">
                 <div style={{ flexBasis: `${leftHeights[0]}px`, minHeight: '120px' }} className="flex flex-col shrink-0 overflow-hidden">
-                    <div className="px-6 py-5 bg-zinc-50/80 dark:bg-zinc-800/80 border-b border-zinc-200 flex items-center justify-between shrink-0"> <h3 className="text-sm font-black text-zinc-900 flex items-center gap-2"> <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full" /> 團隊待辦 </h3> </div>
-                    <div className="p-4 flex gap-2"> <input type="text" value={newTodoTitle} onChange={(e)=>setNewTodoTitle(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&handleAddTodo()} placeholder="新增事項..." className="flex-1 bg-zinc-100 border-none rounded-xl px-4 py-2 text-xs font-bold outline-none" /> <button onClick={handleAddTodo} className="p-2 bg-emerald-600 text-white rounded-xl shadow-lg shadow-emerald-500/20 active:scale-90 transition-all"> <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" /></svg> </button> </div>
-                    <div className="flex-1 overflow-y-auto no-scrollbar p-4 space-y-2"> {teamTodosList.map(t => ( <div key={t.id} className="p-3 bg-white border border-zinc-100 rounded-2xl shadow-sm flex items-center gap-3 cursor-pointer hover:shadow-md transition-all" onClick={()=>setModalConfig({isOpen:true, initialData:{case_name:t.displayTitle||t.title, status:'pending_claim'} as any, mode:'todo_promotion', todoId:t.id})}> <button onClick={(e)=>{e.stopPropagation(); handleToggleTodo(t)}} className={`shrink-0 w-5 h-5 rounded-lg border-2 transition-all flex items-center justify-center ${t.is_completed?'bg-emerald-500 border-emerald-500 text-white':'border-zinc-200'}`}>{t.is_completed&&<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}</button> <span className={`text-xs font-bold truncate ${t.is_completed?'text-zinc-300 line-through':'text-zinc-700'}`}>{t.displayTitle}</span> </div> ))} </div>
+                    <div className="px-3 py-2.5 bg-zinc-50/80 dark:bg-zinc-800/80 border-b border-zinc-200 flex items-center justify-between shrink-0"> <h3 className="text-xs font-black text-zinc-900 flex items-center gap-1.5"> <span className="w-2 h-2 bg-emerald-500 rounded-full" /> 團隊待辦 </h3> </div>
+                    <div className="px-2.5 py-2 flex gap-1.5"> <input type="text" value={newTodoTitle} onChange={(e)=>setNewTodoTitle(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&handleAddTodo()} placeholder="新增事項..." className="flex-1 bg-zinc-100 border-none rounded-lg px-3 py-1.5 text-xs font-bold outline-none" /> <button onClick={handleAddTodo} className="p-1.5 bg-emerald-600 text-white rounded-lg shadow-sm active:scale-90 transition-all"> <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" /></svg> </button> </div>
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-2.5 py-1.5 space-y-1.5"> {teamTodosList.map(t => ( <div key={t.id} className="px-2 py-1.5 bg-white border border-zinc-100 rounded-xl shadow-sm flex items-center gap-2 cursor-pointer hover:shadow-md transition-all" onClick={()=>setModalConfig({isOpen:true, initialData:{case_name:t.displayTitle||t.title, status:'pending_claim'} as any, mode:'todo_promotion', todoId:t.id})}> <button onClick={(e)=>{e.stopPropagation(); handleToggleTodo(t)}} className={`shrink-0 w-4 h-4 rounded-md border-2 transition-all flex items-center justify-center ${t.is_completed?'bg-emerald-500 border-emerald-500 text-white':'border-zinc-200'}`}>{t.is_completed&&<svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}</button> <span className={`text-[11px] font-bold truncate ${t.is_completed?'text-zinc-300 line-through':'text-zinc-700'}`}>{t.displayTitle}</span> </div> ))} </div>
                 </div>
                 <div className="h-1 bg-zinc-100 hover:bg-blue-400 cursor-row-resize shrink-0 transition-colors z-10" onMouseDown={() => { isDraggingRef.current = 0; document.body.classList.add("cursor-row-resize", "select-none"); }} />
                 <div style={{ flexBasis: `${leftHeights[1]}px`, minHeight: '120px' }} className="flex flex-col border-y border-zinc-200 overflow-hidden shrink-0">
-                    <div className="px-6 py-4 bg-zinc-50 border-b flex items-center justify-between shrink-0"> <h3 className="text-sm font-black text-zinc-900 flex items-center gap-2"> <span className="w-2.5 h-2.5 bg-blue-500 rounded-full" /> 個人待辦 </h3> </div>
-                    <div className="p-4 flex gap-2"> <input ref={personalInputRef} type="text" value={newPersonalTodoTitle} onChange={(e)=>setNewPersonalTodoTitle(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&handleAddPersonalTodo()} placeholder="我的事項..." className="flex-1 bg-zinc-100 border-none rounded-xl px-4 py-2 text-xs font-bold outline-none" /> <button onClick={handleAddPersonalTodo} className="p-2 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-500/20 active:scale-90 transition-all"> <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" /></svg> </button> </div>
-                    <div className="flex-1 overflow-y-auto no-scrollbar p-4 space-y-2"> {personalTodosList.map(t => ( <div key={t.id} className="p-3 bg-white border border-zinc-100 rounded-2xl shadow-sm flex items-center gap-3 cursor-pointer hover:shadow-md transition-all" onClick={()=>setModalConfig({isOpen:true, initialData:{case_name:t.displayTitle||t.title, status:'pending_claim'} as any, mode:'todo_promotion', todoId:t.id})}> <button onClick={(e)=>{e.stopPropagation(); handleToggleTodo(t)}} className={`shrink-0 w-5 h-5 rounded-lg border-2 transition-all flex items-center justify-center ${t.is_completed?'bg-blue-500 border-blue-500 text-white':'border-zinc-200'}`}>{t.is_completed&&<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}</button> <span className={`text-xs font-bold truncate ${t.is_completed?'text-zinc-300 line-through':'text-zinc-700'}`}>{t.displayTitle}</span> </div> ))} </div>
+                    <div className="px-3 py-2.5 bg-zinc-50 border-b flex items-center justify-between shrink-0"> <h3 className="text-xs font-black text-zinc-900 flex items-center gap-1.5"> <span className="w-2 h-2 bg-blue-500 rounded-full" /> 個人待辦 </h3> </div>
+                    <div className="px-2.5 py-2 flex gap-1.5"> <input ref={personalInputRef} type="text" value={newPersonalTodoTitle} onChange={(e)=>setNewPersonalTodoTitle(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&handleAddPersonalTodo()} placeholder="我的事項..." className="flex-1 bg-zinc-100 border-none rounded-lg px-3 py-1.5 text-xs font-bold outline-none" /> <button onClick={handleAddPersonalTodo} className="p-1.5 bg-blue-600 text-white rounded-lg shadow-sm active:scale-90 transition-all"> <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" /></svg> </button> </div>
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-2.5 py-1.5 space-y-1.5"> {personalTodosList.map(t => ( <div key={t.id} className="px-2 py-1.5 bg-white border border-zinc-100 rounded-xl shadow-sm flex items-center gap-2 cursor-pointer hover:shadow-md transition-all" onClick={()=>setModalConfig({isOpen:true, initialData:{case_name:t.displayTitle||t.title, status:'pending_claim'} as any, mode:'todo_promotion', todoId:t.id})}> <button onClick={(e)=>{e.stopPropagation(); handleToggleTodo(t)}} className={`shrink-0 w-4 h-4 rounded-md border-2 transition-all flex items-center justify-center ${t.is_completed?'bg-blue-500 border-blue-500 text-white':'border-zinc-200'}`}>{t.is_completed&&<svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}</button> <span className={`text-[11px] font-bold truncate ${t.is_completed?'text-zinc-300 line-through':'text-zinc-700'}`}>{t.displayTitle}</span> </div> ))} </div>
                 </div>
                 <div className="h-1 bg-zinc-100 hover:bg-blue-400 cursor-row-resize shrink-0 transition-colors z-10" onMouseDown={() => { isDraggingRef.current = 1; document.body.classList.add("cursor-row-resize", "select-none"); }} />
                 <div className="flex-1 flex flex-col overflow-hidden shrink-0">
-                    <div className="px-6 py-5 bg-zinc-50 border-b flex items-center justify-between shrink-0"> <h3 className="text-sm font-black text-zinc-900 flex items-center gap-2"> <span className="w-2.5 h-2.5 bg-amber-500 rounded-full" /> 任務申請 </h3> </div>
-                    <div className="flex-1 overflow-y-auto no-scrollbar p-4 space-y-3">
+                    <div className="px-3 py-2.5 bg-zinc-50 border-b flex items-center justify-between shrink-0"> <h3 className="text-xs font-black text-zinc-900 flex items-center gap-1.5"> <span className="w-2 h-2 bg-amber-500 rounded-full" /> 任務申請 </h3> </div>
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-2.5 py-2 space-y-2">
                         {externalApps.map(app => (
                             <div key={app.id} onClick={()=>setModalConfig({isOpen:true, initialData:app, mode:'application', appId:app.id})} className="p-4 bg-white border-2 border-zinc-50 rounded-2xl shadow-sm cursor-pointer hover:shadow-xl transition-all group">
                                 <div className="flex justify-between items-start mb-2"> <div className="text-[10px] font-black text-amber-600 uppercase tracking-widest bg-amber-50 px-2 py-0.5 rounded">PENDING</div> <button onClick={(e)=>{e.stopPropagation(); setExternalApps(prev=>prev.filter(i=>i.id!==app.id)); actions.deleteScheduleAction(app.id).then(()=>refreshSchedules())}} className="opacity-0 group-hover:opacity-100 p-1 text-zinc-300 hover:text-red-500 transition-all"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button> </div>
