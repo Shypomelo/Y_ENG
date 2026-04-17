@@ -13,6 +13,7 @@ import {
     syncEventToGoogle,
     deleteEventFromGoogle,
     fetchExternalEvents,
+    fetchExternalEventById,
     hasGoogleCredentials,
     testGoogleConnection
 } from "../../lib/google-calendar";
@@ -400,11 +401,52 @@ export async function getScheduleViewDataAction(startDate: string, endDate: stri
         revalidatePath('/schedule');
     }
 
-    const refreshedInternalData = updateTargets.length > 0
+    const googleOverlayIds = new Set(
+        googleOverlay
+            .map((item) => item.google_event_id)
+            .filter((value): value is string => Boolean(value))
+    );
+
+    const deleteCandidates = internalData.filter((item) => {
+        if (!item.google_event_id || item.source === 'google_readonly') {
+            return false;
+        }
+
+        return !googleOverlayIds.has(item.google_event_id);
+    });
+
+    const deleteTargets: string[] = [];
+    for (const candidate of deleteCandidates) {
+        const lookup = await fetchExternalEventById(candidate.google_event_id!);
+        if (!lookup.success) {
+            continue;
+        }
+
+        if (lookup.found === false) {
+            deleteTargets.push(candidate.id);
+        }
+    }
+
+    if (deleteTargets.length > 0) {
+        await Promise.all(
+            deleteTargets.map((id) => scheduleRepo.deleteSchedule(id))
+        );
+        revalidatePath('/schedule');
+    }
+
+    const refreshedInternalData = (updateTargets.length > 0 || deleteTargets.length > 0)
         ? await scheduleRepo.listSchedules(startDate, endDate)
         : internalData;
 
-    const mappedGoogleEventIds = new Set(internalByGoogleId.keys());
+    const deletedGoogleEventIds = new Set(
+        deleteCandidates
+            .filter((item) => deleteTargets.includes(item.id))
+            .map((item) => item.google_event_id!)
+    );
+
+    const mappedGoogleEventIds = new Set(
+        [...internalByGoogleId.keys()].filter((id) => !deletedGoogleEventIds.has(id))
+    );
     const unmatchedGoogleOverlay = googleOverlay.filter(
         (item) => !item.google_event_id || !mappedGoogleEventIds.has(item.google_event_id)
     );

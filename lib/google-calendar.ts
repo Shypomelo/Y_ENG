@@ -132,17 +132,52 @@ export async function deleteEventFromGoogle(googleEventId: string) {
 export async function fetchExternalEvents(timeMin: string, timeMax: string) {
     try {
         const { calendar, calendarId } = await getCalendarClient();
-        const res = await calendar.events.list({
-            calendarId,
-            timeMin: new Date(timeMin).toISOString(),
-            timeMax: new Date(timeMax).toISOString(),
-            singleEvents: true,
-            orderBy: 'startTime',
-        });
-        return { success: true, items: res.data.items || [] };
+        const items: calendar_v3.Schema$Event[] = [];
+        let pageToken: string | undefined;
+
+        do {
+            const res = await calendar.events.list({
+                calendarId,
+                timeMin: new Date(timeMin).toISOString(),
+                timeMax: new Date(timeMax).toISOString(),
+                singleEvents: true,
+                orderBy: 'startTime',
+                pageToken,
+            });
+
+            const pageItems = (res.data.items || []).filter((item) => item?.status !== 'cancelled');
+            items.push(...pageItems);
+            pageToken = res.data.nextPageToken || undefined;
+        } while (pageToken);
+
+        return { success: true, items };
     } catch (error: any) {
         console.warn("[GoogleCalendar] Fetch External Failed:", error.message, error.response?.data);
         return { success: false, error: error.message, details: error.response?.data, items: [] };
+    }
+}
+
+export async function fetchExternalEventById(googleEventId: string) {
+    try {
+        const { calendar, calendarId } = await getCalendarClient();
+        const res = await calendar.events.get({
+            calendarId,
+            eventId: googleEventId,
+        });
+
+        if (res.data?.status === 'cancelled') {
+            return { success: true, found: false, item: null };
+        }
+
+        return { success: true, found: true, item: res.data };
+    } catch (error: any) {
+        const statusCode = error?.code || error?.response?.status || null;
+        if (statusCode === 404 || statusCode === 410) {
+            return { success: true, found: false, item: null };
+        }
+
+        console.warn("[GoogleCalendar] Fetch External By ID Failed:", error.message, error.response?.data);
+        return { success: false, found: null, error: error.message, details: error.response?.data };
     }
 }
 
